@@ -64,6 +64,25 @@ For comprehensive guides, references, and operational procedures, refer to the `
 
 ## Getting Started (Production Deployment)
 
+### Pre-Installation Requirement: System Timezone & NTP Time Synchronization
+
+> [!IMPORTANT]
+> **Timezone Alignment & Clock Synchronization**:
+> LNMP telemetry analysis, uptime SLA calculation, and real-time state transition logging rely on precise timestamp filtering (`start_time <= end_dt`). If the server's timezone or system clock is out of sync with your operational region or client endpoints, newly captured telemetry events, RTT trends, and transition logs may appear blank or be excluded from query windows.
+>
+> Before installing or starting LNMP services, configure your host's regional timezone and enable network time synchronization (NTP):
+>
+> ```bash
+> # Set the server timezone to your operational region (e.g. Europe/London, America/New_York, UTC, Africa/Lagos)
+> sudo timedatectl set-timezone <Your/Region_Timezone>
+>
+> # Enable Network Time Protocol (NTP) synchronization
+> sudo timedatectl set-ntp on
+>
+> # Verify time synchronization and active timezone
+> timedatectl status
+> ```
+
 ### 1. Fresh Installation
 
 ```bash

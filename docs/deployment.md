@@ -9,11 +9,30 @@ This guide details the procedures for installing, maintaining, and upgrading the
 - **OS:** Ubuntu 22.04 LTS or 24.04 LTS (Debian 12+ also supported)
 - **Hardware (Minimum for Production):** 2 vCPUs, 2 GB RAM, 10–25 GB SSD.
 - **Dependencies:** PostgreSQL 14+ with TimescaleDB, Redis 6+ (for Memory Acceleration mode), Node.js 18+, Python 3.10+, Nginx.
+- **Time Synchronization & Timezone:** Accurate system clock via NTP (`systemd-timesyncd` or `chrony`) and server timezone configured to match the operational region. Critical for TimescaleDB telemetry partitioning, RTT graph rendering, and SLA calculations.
 - **Network Permissions:** The `netmon-engine` daemon requires `CAP_NET_RAW` capability to send raw ICMP packets.
 
 ---
 
 ## 2. Initial Installation
+
+### Pre-Installation: System Timezone & Clock Synchronization
+
+> [!IMPORTANT]
+> LNMP relies on strict time-window boundaries for calculating uptime percentages, transition logs, and RTT telemetry graphs. Ensure the server's timezone matches your operations region and NTP time sync is active before launching LNMP services:
+>
+> ```bash
+> # 1. Set regional timezone (e.g., Europe/London, America/New_York, UTC, Africa/Lagos)
+> sudo timedatectl set-timezone <Your/Region_Timezone>
+>
+> # 2. Enable NTP time synchronization
+> sudo timedatectl set-ntp on
+>
+> # 3. Confirm active timezone and NTP synchronization status
+> timedatectl status
+> ```
+
+### Automated Installation
 
 The initial installation is fully automated via `install.sh`:
 

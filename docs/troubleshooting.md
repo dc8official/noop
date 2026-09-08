@@ -1,6 +1,6 @@
-# LNMP Troubleshooting & Disaster Recovery Guide
+# LNMP Troubleshooting & Disaster Recovery Guide — Version 3.0.0
 
-This guide provides systematic diagnostic steps and solutions for common operational issues encountered when running LNMP v2.0 (Beta) in production.
+This guide provides systematic diagnostic steps and solutions for common operational issues encountered when running LNMP v3.0.0 in production.
 
 ---
 
@@ -97,7 +97,38 @@ tail -n 100 -f /var/log/netmon/error.log
   # Test traceroute manually from server CLI
   traceroute -n -w 2 -m 15 <target_ip>
   ```
-* **Note**: In LNMP v2.0, traceroute timeouts are handled gracefully and anonymous hops (`* * *`) are rendered safely without crashing topology calculations.
+* **Note**: In LNMP v3.0.0, traceroute timeouts are handled gracefully and anonymous hops (`* * *`) are rendered safely without crashing topology calculations.
+
+### G. Endpoint Telemetry, RTT Trends, or Transition Logs Appear Blank
+* **Symptoms**:
+  - Dashboard endpoint cards display live operational status and latency.
+  - Clicking into **Endpoint Detail View** shows:
+    - Blank state transition logs (*"No state transitions recorded in this period"*).
+    - Blank RTT latency trend chart (*"No RTT data available for this period"*).
+    - Missing state timeline history.
+* **Cause**:
+  - **Host Timezone Misconfiguration or Clock Skew**: The server's timezone or system clock is out of sync with the operational region or client browser. Because telemetry queries query events within strict time boundaries (`start_time <= end_dt`), a server clock lagging behind real time or configured with an incorrect timezone offset causes newly recorded events to fall outside the query window.
+* **Fix**:
+  1. Inspect the server's current time, timezone, and NTP synchronization:
+     ```bash
+     timedatectl status
+     ```
+  2. Set the correct regional timezone (e.g., `Europe/London`, `America/New_York`, `UTC`, `Africa/Lagos`):
+     ```bash
+     sudo timedatectl set-timezone <Your/Region_Timezone>
+     ```
+  3. Ensure Network Time Protocol (NTP) synchronization is enabled:
+     ```bash
+     sudo timedatectl set-ntp on
+     ```
+  4. Confirm that the system clock is synchronized:
+     ```bash
+     timedatectl
+     ```
+  5. Restart the monitoring daemons so queries and event logging immediately align with the synchronized clock:
+     ```bash
+     sudo systemctl restart netmon-engine netmon-api
+     ```
 
 ---
 
