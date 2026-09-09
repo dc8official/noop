@@ -112,12 +112,14 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute, RouterLink, RouterView } from 'vue-router'
 import Toast from 'primevue/toast'
 import ConfirmDialog from 'primevue/confirmdialog'
+import { useToast } from 'primevue/usetoast'
 import { logout, changePassword, getVersion } from './services/api.js'
 import { currentUser, isAdmin, mustChangePassword, loadUserFromStorage, setUserState, clearUserState } from './services/auth.js'
 import { useSSE } from './composables/useSSE.js'
 
 const router = useRouter()
 const route = useRoute()
+const toast = useToast()
 const isDark = ref(true)
 const appVersion = ref('v3.1.0')
 const liveAnnouncement = ref('')
@@ -220,7 +222,12 @@ async function executeChangePassword() {
       confirm_password: ''
     }
 
-    alert('Password updated successfully! You now have full access to the platform.')
+    toast.add({
+      severity: 'success',
+      summary: 'Password Updated',
+      detail: 'Password updated successfully! You now have full access to the platform.',
+      life: 3500,
+    })
   } catch (err) {
     console.error('Failed to change password:', err)
     changePasswordError.value = err.response?.data?.detail || 'Failed to update password. Verify current password.'

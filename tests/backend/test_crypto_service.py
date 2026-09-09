@@ -67,3 +67,14 @@ def test_mask_secret_basic_auth_url():
     masked = mask_secret(url)
     assert masked == "https://admin:••••••••@host.com/hook"
     assert "secret123" not in masked
+
+
+def test_mask_all_12_sensitive_query_keys():
+    keys = ["sig", "token", "key", "secret", "webhook", "auth", "api_key", "password", "access_token", "apikey", "bearer", "code"]
+    query_parts = "&".join(f"{k}=val_{k}" for k in keys)
+    url = f"https://example.com/api?{query_parts}"
+    masked = mask_secret(url)
+    for k in keys:
+        assert f"val_{k}" not in masked
+        assert f"{k}=••••••••" in masked
+

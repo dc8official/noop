@@ -367,3 +367,132 @@ async def test_rate_limit_timing_on_provider_error():
     # Delivery failed, so rate limit timestamp must NOT be recorded
     assert rl_key not in dispatcher._rate_limits
 
+
+@pytest.mark.anyio
+async def test_smtp_to_emails_comma_separated_parsing():
+    dispatcher = AlertDispatcher()
+    config = {
+        "to_emails": "admin@corp.net, ops@corp.net; alerts@corp.net",
+        "smtp_host": "smtp.corp.net",
+    }
+    sent_msgs = []
+
+    def mock_send(cfg, msg):
+        sent_msgs.append(msg["To"])
+
+    with patch.object(dispatcher, "_sync_send_smtp", side_effect=mock_send):
+        status, code, msg = await dispatcher._send_to_provider(
+            channel_type="EMAIL_SMTP",
+            config=config,
+            endpoint_name="core-switch-01",
+            ip_address="10.0.0.1",
+            event_type="STATE_TRANSITION",
+            severity="DOWN",
+            timestamp=datetime.now(timezone.utc),
+            details={},
+        )
+        assert status == "DELIVERED"
+        assert code == 250
+        assert len(sent_msgs) == 3
+        assert "admin@corp.net" in sent_msgs
+        assert "ops@corp.net" in sent_msgs
+        assert "alerts@corp.net" in sent_msgs
+
+
+def test_smtp_socket_cleanup_on_error():
+    from unittest.mock import MagicMock
+    dispatcher = AlertDispatcher()
+    config = {
+        "smtp_host": "mail.corp.net",
+        "smtp_port": 587,
+        "use_tls": True,
+        "use_ssl": False,
+    }
+    mock_msg = MagicMock()
+    mock_server = MagicMock()
+    mock_server.starttls.side_effect = Exception("TLS handshake failed")
+
+    with patch("smtplib.SMTP", return_value=mock_server):
+        with pytest.raises(Exception, match="TLS handshake failed"):
+            dispatcher._sync_send_smtp(config, mock_msg)
+
+        # Ensure server.quit() and server.close() were invoked in finally
+        mock_server.quit.assert_called_once()
+        mock_server.close.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_rca_engine_publishes_rca_incident_to_broker():
+    from uuid import uuid4
+    from unittest.mock import MagicMock, AsyncMock
+    from app.services.rca_engine import run_differential_rca
+
+    root_ep_id = uuid4()
+    child_ep_id = uuid4()
+    incident_uuid = uuid4()
+
+    mock_ep_row = MagicMock(ip_address="10.10.10.1", enable_rca=True, is_l2_segment=False)
+    mock_ep_res = MagicMock()
+    mock_ep_res.fetchone.return_value = mock_ep_row
+
+    mock_bl_row = MagicMock(hops=[{"hop": 1, "ip": "10.0.0.1"}, {"hop": 2, "ip": "10.10.10.1"}])
+    mock_bl_res = MagicMock()
+    mock_bl_res.fetchone.return_value = mock_bl_row
+
+    mock_inc_row = MagicMock(id=incident_uuid)
+    mock_inc_res = MagicMock()
+    mock_inc_res.fetchone.return_value = mock_inc_row
+
+    mock_sym_row = MagicMock(id=child_ep_id)
+    mock_sym_res = MagicMock()
+    mock_sym_res.fetchall.return_value = [mock_sym_row]
+
+    mock_session = AsyncMock()
+    mock_session.execute.side_effect = [mock_ep_res, mock_bl_res, mock_inc_res, mock_sym_res]
+
+    published_events = []
+    mock_broker = AsyncMock()
+
+    async def mock_pub(channel, payload):
+        published_events.append((channel, payload))
+
+    mock_broker.publish.side_effect = mock_pub
+
+    with patch("app.services.rca_engine.run_throttled_traceroute", return_value={"hops": [{"hop": 1, "ip": "10.0.0.1"}]}), \
+         patch("app.services.rca_engine.driver_manager.get_event_broker", return_value=mock_broker):
+        res = await run_differential_rca(root_ep_id, db=mock_session)
+        assert res is not None
+        assert res["incident_id"] == str(incident_uuid)
+        assert str(child_ep_id) in res["symptom_endpoint_ids"]
+
+        assert len(published_events) == 1
+        ch, payload = published_events[0]
+        assert ch == "RCA_INCIDENT"
+        assert payload["event_type"] == "RCA_INCIDENT"
+        assert payload["incident_id"] == str(incident_uuid)
+        assert payload["root_cause_endpoint_id"] == str(root_ep_id)
+        assert str(child_ep_id) in payload["symptom_endpoint_ids"]
+
+
+@pytest.mark.anyio
+async def test_election_loop_connection_cleanup_on_exception():
+    from unittest.mock import MagicMock
+
+    dispatcher = AlertDispatcher()
+    mock_conn = AsyncMock()
+    mock_conn.execute.side_effect = Exception("Postgres query timeout")
+    mock_conn.close = AsyncMock()
+
+    with patch("app.services.alert_dispatcher.async_engine") as mock_engine, \
+         patch("app.services.alert_dispatcher.asyncio.sleep", side_effect=[None, asyncio.CancelledError]):
+        mock_engine.dialect.name = "postgresql"
+        mock_engine.connect = AsyncMock(return_value=mock_conn)
+
+        try:
+            await dispatcher._standby_election_loop()
+        except asyncio.CancelledError:
+            pass
+
+        # Verify conn.close was called even though execute raised an exception
+        mock_conn.close.assert_called()
+

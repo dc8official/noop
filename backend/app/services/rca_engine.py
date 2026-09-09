@@ -192,8 +192,13 @@ async def run_differential_rca(
                 "failure_trace_snapshot": json.dumps(live_hops),
             },
         )
-        row = res.fetchone()
-        incident_id = str(row.id) if row else None
+        row = res.fetchone() if hasattr(res, "fetchone") else None
+        incident_id = None
+        if row:
+            val = getattr(row, "id", None)
+            if val is None and len(row) > 0:
+                val = row[0]
+            incident_id = str(val) if val else None
 
         logger.info(
             "Recorded RCA incident %s for endpoint %s: %s",
@@ -211,8 +216,14 @@ async def run_differential_rca(
                   AND endpoint_status != 'DELETED'
             """)
             sym_res = await session.execute(sym_query, {"endpoint_id": str(endpoint_id)})
-            if sym_res and hasattr(sym_res, "fetchall"):
-                symptom_endpoint_ids = [str(r.id) for r in sym_res.fetchall()]
+            if sym_res:
+                rows = sym_res.fetchall() if hasattr(sym_res, "fetchall") else []
+                for r in rows:
+                    val = getattr(r, "id", None)
+                    if val is None and len(r) > 0:
+                        val = r[0]
+                    if val:
+                        symptom_endpoint_ids.append(str(val))
         except (Exception, StopIteration, StopAsyncIteration) as exc:
             logger.debug("Could not query symptom endpoints: %s", exc)
 

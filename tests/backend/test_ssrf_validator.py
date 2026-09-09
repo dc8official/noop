@@ -51,3 +51,14 @@ def test_ssrf_blocks_cgnat_rfc6598():
     with pytest.raises(ValueError, match="private network"):
         validate_outbound_url("http://100.127.255.254/api", allow_private=False)
 
+
+def test_ssrf_blocks_ipv4_mapped_ipv6():
+    with pytest.raises(ValueError, match="loopback|private network|invalid/reserved"):
+        validate_outbound_url("http://[::ffff:127.0.0.1]/status", allow_private=False)
+
+    with pytest.raises(ValueError, match="loopback|invalid/reserved"):
+        validate_outbound_url("http://[::ffff:127.0.0.1]/status", allow_private=True)
+
+    with pytest.raises(ValueError, match="private network|invalid/reserved"):
+        validate_outbound_url("http://[::ffff:100.64.0.1]/webhook", allow_private=False)
+

@@ -65,6 +65,9 @@ def validate_outbound_url(url: str, allow_private: bool | None = None) -> None:
             raise ValueError(f"DNS resolution failure for host '{hostname}'.")
 
         for ip in resolved_ips:
+            if getattr(ip, "ipv4_mapped", None):
+                ip = ip.ipv4_mapped
+
             str_ip = str(ip)
             if str_ip in BLOCKED_IPS:
                 raise ValueError(

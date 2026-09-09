@@ -517,6 +517,9 @@ async def csv_generator(
     output.seek(0)
     output.truncate(0)
 
+    if not endpoint_ids:
+        return
+
     last_start_time: Optional[datetime] = None
     last_id: Optional[UUID] = None
     limit = 1000

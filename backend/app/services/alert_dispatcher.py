@@ -115,17 +115,24 @@ class AlertDispatcher:
                     break
                 if async_engine.dialect.name == "postgresql":
                     conn = await async_engine.connect()
-                    res = await conn.execute(text(f"SELECT pg_try_advisory_lock({ADVISORY_LOCK_ID})"))
-                    acquired = bool(res.scalar())
-                    if acquired:
-                        self._lock_conn = conn
-                        self._is_leader = True
-                        logger.info("[AlertDispatcher] Active leader election won during standby retry. Promoting to leader.")
-                        self._tasks.append(asyncio.create_task(self._listen_broker("STATE_TRANSITION"), name="alert_broker_state_trans"))
-                        self._tasks.append(asyncio.create_task(self._listen_broker("RCA_INCIDENT"), name="alert_broker_rca"))
-                        break
-                    else:
-                        await conn.close()
+                    try:
+                        res = await conn.execute(text(f"SELECT pg_try_advisory_lock({ADVISORY_LOCK_ID})"))
+                        acquired = bool(res.scalar())
+                        if acquired:
+                            self._lock_conn = conn
+                            self._is_leader = True
+                            logger.info("[AlertDispatcher] Active leader election won during standby retry. Promoting to leader.")
+                            self._tasks.append(asyncio.create_task(self._listen_broker("STATE_TRANSITION"), name="alert_broker_state_trans"))
+                            self._tasks.append(asyncio.create_task(self._listen_broker("RCA_INCIDENT"), name="alert_broker_rca"))
+                            break
+                        else:
+                            await conn.close()
+                    except Exception:
+                        try:
+                            await conn.close()
+                        except Exception:
+                            pass
+                        raise
                 else:
                     self._is_leader = True
                     self._tasks.append(asyncio.create_task(self._listen_broker("STATE_TRANSITION"), name="alert_broker_state_trans"))
@@ -144,7 +151,7 @@ class AlertDispatcher:
             self._election_task.cancel()
             try:
                 await self._election_task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
             self._election_task = None
 
@@ -288,7 +295,15 @@ class AlertDispatcher:
             return False
         return True
 
-    async def _dispatch_event(self, event_type: str, data: Dict[str, Any]) -> None:
+    async def _dispatch_event(self, event_type: Any, data: Optional[Dict[str, Any]] = None) -> None:
+        if data is None:
+            if isinstance(event_type, tuple) and len(event_type) == 2:
+                event_type, data = event_type
+            elif isinstance(event_type, dict):
+                data = event_type
+                event_type = data.get("event_type", "STATE_TRANSITION")
+            else:
+                data = {}
         now = datetime.now(timezone.utc)
 
         # Handle RCA_INCIDENT event
@@ -611,8 +626,10 @@ class AlertDispatcher:
 
             async with httpx.AsyncClient(timeout=5.0) as client:
                 last_exc = None
+                resp = None
                 for attempt in range(3):
                     try:
+                        last_exc = None
                         resp = await client.post(webhook_url, json=payload, headers=headers)
                         if 200 <= resp.status_code < 300:
                             return "DELIVERED", resp.status_code, resp.text[:500]
@@ -628,11 +645,18 @@ class AlertDispatcher:
 
                 if last_exc:
                     raise last_exc
-                return "FAILED", resp.status_code, resp.text[:500]
+                if resp is not None:
+                    return "FAILED", resp.status_code, resp.text[:500]
+                return "FAILED", None, "Webhook delivery failed after retries."
 
         elif ctype == "EMAIL_SMTP":
-            to_emails = config.get("to_emails") or [config.get("to_email")]
-            to_emails = [e for e in to_emails if e]
+            raw_to = config.get("to_emails") or config.get("to_email")
+            if isinstance(raw_to, str):
+                to_emails = [e.strip() for e in raw_to.replace(";", ",").split(",") if e.strip()]
+            elif isinstance(raw_to, (list, tuple)):
+                to_emails = [str(e).strip() for e in raw_to if e and str(e).strip()]
+            else:
+                to_emails = []
             if not to_emails:
                 raise ValueError("No recipient email address specified in SMTP configuration.")
 
@@ -667,26 +691,28 @@ class AlertDispatcher:
         context = ssl.create_default_context()
         context.minimum_version = ssl.TLSVersion.TLSv1_2
 
-        if use_ssl:
-            server = smtplib.SMTP_SSL(host, port, context=context, timeout=10.0)
-        else:
-            server = smtplib.SMTP(host, port, timeout=10.0)
-
+        server = None
         try:
+            if use_ssl:
+                server = smtplib.SMTP_SSL(host, port, context=context, timeout=10.0)
+            else:
+                server = smtplib.SMTP(host, port, timeout=10.0)
+
             if use_tls and not use_ssl:
                 server.starttls(context=context)
             if username and password:
                 server.login(username, password)
             server.send_message(msg)
         finally:
-            try:
-                server.quit()
-            except Exception:
-                pass
-            try:
-                server.close()
-            except Exception:
-                pass
+            if server is not None:
+                try:
+                    server.quit()
+                except Exception:
+                    pass
+                try:
+                    server.close()
+                except Exception:
+                    pass
 
     async def _record_delivery_log(
         self,

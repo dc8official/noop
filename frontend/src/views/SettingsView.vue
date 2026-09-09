@@ -457,13 +457,13 @@
                 v-for="p in providerOptions" 
                 :key="p.id" 
                 class="provider-card" 
-                :class="{ active: channelForm.channel_type === p.id }"
+                :class="{ active: selectedProvider === p.id }"
                 role="radio"
-                :aria-checked="channelForm.channel_type === p.id"
+                :aria-checked="selectedProvider === p.id"
                 tabindex="0"
-                @click="channelForm.channel_type = p.id"
-                @keydown.enter.prevent="channelForm.channel_type = p.id"
-                @keydown.space.prevent="channelForm.channel_type = p.id"
+                @click="selectProvider(p.id)"
+                @keydown.enter.prevent="selectProvider(p.id)"
+                @keydown.space.prevent="selectProvider(p.id)"
               >
                 <span class="provider-icon">{{ p.icon }}</span>
                 <span class="provider-name">{{ p.name }}</span>
@@ -725,7 +725,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
@@ -758,6 +758,15 @@ function switchTab(tab) {
   activeTab.value = tab
   router.replace({ query: { ...route.query, tab } })
 }
+
+watch(
+  () => route.query.tab,
+  (newTab) => {
+    if (newTab && ['alerts', 'performance', 'security', 'users'].includes(newTab)) {
+      activeTab.value = newTab
+    }
+  }
+)
 
 const channelModalRef = ref(null)
 let channelOpenerElement = null
@@ -883,6 +892,12 @@ const channelForm = reactive({
   endpoint_ids: [],
   severity_filters: ['DOWN', 'RECOVERED'],
 })
+
+const selectedProvider = computed(() => channelForm.channel_type)
+
+function selectProvider(providerId) {
+  channelForm.channel_type = providerId
+}
 
 // Users state
 const users = ref([])
@@ -1544,13 +1559,13 @@ onMounted(() => {
 
 /* Engine badge */
 .engine-badge {
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   padding: 3px 8px;
   border-radius: 4px;
 }
 
-.badge-redis { background: rgba(239, 68, 68, 0.15); color: #EF4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+.badge-redis { background: rgba(239, 68, 68, 0.15); color: #EF4444; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 11px; font-weight: 600; }
 .badge-pg { background: rgba(59, 130, 246, 0.15); color: #1d4ed8; border: 1px solid rgba(29, 78, 216, 0.3); font-size: 11px; font-weight: 600; }
 
 /* Provider pills */
@@ -1588,8 +1603,8 @@ onMounted(() => {
 }
 
 .severity-tag {
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   padding: 1px 6px;
   border-radius: 3px;
   background: var(--bg-surface-selected);

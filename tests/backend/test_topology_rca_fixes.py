@@ -82,9 +82,11 @@ def test_rca_public_ip_wan_vs_l2():
         bl_res = MagicMock()
         bl_res.fetchone.return_value = bl_row
 
-        # Mock incident insert
+        # Mock incident insert and symptom endpoints query
         inc_res = MagicMock()
-        mock_db.execute.side_effect = [ep_res, bl_res, inc_res]
+        sym_res = MagicMock()
+        sym_res.fetchall.return_value = []
+        mock_db.execute.side_effect = [ep_res, bl_res, inc_res, sym_res]
 
         rca_res = await run_differential_rca(public_ep_id, db=mock_db)
         assert rca_res is not None
