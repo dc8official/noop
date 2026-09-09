@@ -150,6 +150,9 @@
                   <span v-else class="badge-scope custom">
                     {{ ch.endpoint_ids.length }} Specific Node(s)
                   </span>
+                  <div v-if="ch.subnet_filters && ch.subnet_filters.length > 0" class="text-xs text-muted mt-1 font-mono">
+                    Subnets: {{ ch.subnet_filters.join(', ') }}
+                  </div>
                 </td>
                 <td>
                   <div class="severity-tag-group">
@@ -585,6 +588,20 @@
             </div>
           </div>
 
+          <!-- Subnet Filters -->
+          <div class="form-group">
+            <label class="setting-label">
+              Subnet Filters (Optional)
+              <span class="label-hint">(Comma-separated CIDR notation, e.g. 10.0.0.0/16, 192.168.1.0/24)</span>
+            </label>
+            <input 
+              v-model="channelForm.subnetFiltersRaw" 
+              type="text" 
+              placeholder="e.g. 10.0.0.0/16, 192.168.1.0/24" 
+              class="form-input font-mono"
+            />
+          </div>
+
           <!-- Severity Filters -->
           <div class="form-group">
             <label class="setting-label">Triggering Severity States</label>
@@ -889,6 +906,7 @@ const channelForm = reactive({
   },
   headersRaw: '',
   toEmailsRaw: '',
+  subnetFiltersRaw: '',
   endpoint_ids: [],
   severity_filters: ['DOWN', 'RECOVERED'],
 })
@@ -1053,6 +1071,7 @@ function openAddChannelModal() {
   }
   channelForm.headersRaw = ''
   channelForm.toEmailsRaw = ''
+  channelForm.subnetFiltersRaw = ''
   channelForm.endpoint_ids = []
   channelForm.severity_filters = ['DOWN', 'RECOVERED']
   channelScope.value = 'all'
@@ -1071,6 +1090,7 @@ function openEditChannelModal(ch) {
   channelForm.is_enabled = ch.is_enabled
   channelForm.config = { ...ch.config }
   channelForm.endpoint_ids = ch.endpoint_ids ? [...ch.endpoint_ids] : []
+  channelForm.subnetFiltersRaw = (ch.subnet_filters && ch.subnet_filters.length > 0) ? ch.subnet_filters.join(', ') : ''
   channelForm.severity_filters = ch.severity_filters ? [...ch.severity_filters] : ['DOWN', 'RECOVERED']
   channelScope.value = (ch.endpoint_ids && ch.endpoint_ids.length > 0) ? 'custom' : 'all'
 
@@ -1096,12 +1116,20 @@ function openEditChannelModal(ch) {
 async function saveChannel() {
   channelSaving.value = true
   try {
+    const subnets = channelForm.subnetFiltersRaw
+      ? channelForm.subnetFiltersRaw
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean)
+      : []
+
     const payload = {
       name: channelForm.name,
       channel_type: channelForm.channel_type,
       is_enabled: channelForm.is_enabled,
       config: { ...channelForm.config },
       endpoint_ids: channelScope.value === 'all' ? [] : channelForm.endpoint_ids,
+      subnet_filters: subnets,
       severity_filters: channelForm.severity_filters,
     }
 

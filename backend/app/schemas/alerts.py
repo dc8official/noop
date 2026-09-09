@@ -4,7 +4,28 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+import ipaddress
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _validate_subnets(v: Optional[List[str]]) -> Optional[List[str]]:
+    if v is None:
+        return None
+    validated = []
+    for s in v:
+        if not isinstance(s, str):
+            raise ValueError(f"Subnet filter must be a string, got {type(s).__name__}")
+        s_clean = s.strip()
+        if not s_clean:
+            continue
+        try:
+            ipaddress.ip_network(s_clean, strict=False)
+            validated.append(s_clean)
+        except ValueError as err:
+            raise ValueError(
+                f"Invalid CIDR subnet format: '{s}'. Expected notation like 10.0.0.0/16 or 192.168.1.0/24."
+            ) from err
+    return validated
 
 
 class AlertChannelBase(BaseModel):
@@ -17,6 +38,11 @@ class AlertChannelBase(BaseModel):
     severity_filters: List[str] = Field(default_factory=lambda: ["DOWN", "RECOVERED"])
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("subnet_filters")
+    @classmethod
+    def validate_subnets(cls, v: List[str]) -> List[str]:
+        return _validate_subnets(v) or []
 
 
 class AlertChannelCreate(AlertChannelBase):
@@ -33,6 +59,11 @@ class AlertChannelUpdate(BaseModel):
     severity_filters: Optional[List[str]] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("subnet_filters")
+    @classmethod
+    def validate_subnets(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        return _validate_subnets(v)
 
 
 class AlertChannelResponse(BaseModel):

@@ -59,6 +59,33 @@ def _decrypt_config_dict(raw_config: str) -> Dict[str, Any]:
         return {}
 
 
+def _merge_channel_config(existing_cfg: Dict[str, Any], new_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    merged_cfg = dict(existing_cfg)
+    for k, v in new_cfg.items():
+        existing_val = merged_cfg.get(k)
+        if k == "headers" and isinstance(v, dict):
+            existing_headers = existing_val if isinstance(existing_val, dict) else {}
+            merged_headers = dict(existing_headers)
+            for hk, hv in v.items():
+                if hv is None:
+                    merged_headers.pop(hk, None)
+                elif isinstance(hv, str) and ("••••••••" in hv or "••••••••••••" in hv or "•" in hv):
+                    if hk in existing_headers:
+                        merged_headers[hk] = existing_headers[hk]
+                    else:
+                        merged_headers[hk] = hv
+                else:
+                    merged_headers[hk] = hv
+            merged_cfg[k] = merged_headers
+            continue
+        # If user sent masked bullets back, keep existing decrypted secret!
+        if isinstance(v, str) and ("••••••••" in v or "••••••••••••" in v or "•" in v):
+            if k in existing_cfg:
+                continue
+        merged_cfg[k] = v
+    return merged_cfg
+
+
 @router.get("/channels", response_model=APIResponse)
 async def list_alert_channels(
     current_user: dict = Depends(require_admin),
@@ -102,6 +129,14 @@ async def create_alert_channel(
             raise HTTPException(status_code=400, detail="Webhook URL is required for webhook channels.")
         try:
             await asyncio.to_thread(validate_outbound_url, url)
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err))
+    elif ctype == "EMAIL_SMTP":
+        smtp_host = payload.config.get("smtp_host")
+        if not smtp_host:
+            raise HTTPException(status_code=400, detail="smtp_host is required for EMAIL_SMTP channel.")
+        try:
+            await asyncio.to_thread(validate_outbound_url, f"http://{smtp_host}", allow_private=False)
         except ValueError as err:
             raise HTTPException(status_code=400, detail=str(err))
 
@@ -194,13 +229,7 @@ async def update_alert_channel(
 
     if payload.config is not None:
         existing_cfg = _decrypt_config_dict(ch.config)
-        merged_cfg = dict(existing_cfg)
-
-        for k, v in payload.config.items():
-            # If user sent masked bullets back, keep existing decrypted secret!
-            if isinstance(v, str) and ("••••••••" in v or "••••••••••••" in v):
-                continue
-            merged_cfg[k] = v
+        merged_cfg = _merge_channel_config(existing_cfg, payload.config)
 
         # Validate URL if webhook
         if ch.channel_type in ("TEAMS", "DISCORD", "SLACK", "GENERIC_WEBHOOK"):
@@ -210,6 +239,15 @@ async def update_alert_channel(
                     await asyncio.to_thread(validate_outbound_url, url)
                 except ValueError as err:
                     raise HTTPException(status_code=400, detail=str(err))
+        elif ch.channel_type == "EMAIL_SMTP":
+            smtp_host = merged_cfg.get("smtp_host")
+            if smtp_host:
+                try:
+                    await asyncio.to_thread(validate_outbound_url, f"http://{smtp_host}", allow_private=False)
+                except ValueError as err:
+                    raise HTTPException(status_code=400, detail=str(err))
+            else:
+                raise HTTPException(status_code=400, detail="smtp_host is required for EMAIL_SMTP channel.")
 
         ch.config = encrypt_secret(json.dumps(merged_cfg))
 
@@ -265,10 +303,24 @@ async def test_alert_channel(
 
         cfg = _decrypt_config_dict(ch.config)
         if payload.config:
-            for k, v in payload.config.items():
-                if isinstance(v, str) and ("••••••••" in v or "••••••••••••" in v):
-                    continue
-                cfg[k] = v
+            cfg = _merge_channel_config(cfg, payload.config)
+
+        if ch.channel_type in ("TEAMS", "DISCORD", "SLACK", "GENERIC_WEBHOOK"):
+            url = cfg.get("webhook_url")
+            if url:
+                try:
+                    await asyncio.to_thread(validate_outbound_url, url)
+                except ValueError as err:
+                    raise HTTPException(status_code=400, detail=str(err))
+        elif ch.channel_type == "EMAIL_SMTP":
+            smtp_host = cfg.get("smtp_host")
+            if smtp_host:
+                try:
+                    await asyncio.to_thread(validate_outbound_url, f"http://{smtp_host}", allow_private=False)
+                except ValueError as err:
+                    raise HTTPException(status_code=400, detail=str(err))
+            else:
+                raise HTTPException(status_code=400, detail="smtp_host is required for EMAIL_SMTP channel.")
 
         test_ch = {
             "id": ch.id,
@@ -291,6 +343,14 @@ async def test_alert_channel(
                     await asyncio.to_thread(validate_outbound_url, url)
                 except ValueError as err:
                     raise HTTPException(status_code=400, detail=str(err))
+        elif test_ch["channel_type"] == "EMAIL_SMTP":
+            smtp_host = test_ch["config"].get("smtp_host")
+            if not smtp_host:
+                raise HTTPException(status_code=400, detail="smtp_host is required for EMAIL_SMTP channel.")
+            try:
+                await asyncio.to_thread(validate_outbound_url, f"http://{smtp_host}", allow_private=False)
+            except ValueError as err:
+                raise HTTPException(status_code=400, detail=str(err))
         result = await alert_dispatcher.send_test_alert(test_ch)
     else:
         raise HTTPException(status_code=400, detail="Must provide either channel_id or channel_type and config.")

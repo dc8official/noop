@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
 import logging
+import os
 import smtplib
 import ssl
 from typing import Any, Dict, List, Optional, Tuple
@@ -13,6 +14,7 @@ from uuid import UUID
 import httpx
 from sqlalchemy import select, text
 
+from app.config import settings
 from app.database import AsyncSessionLocal, async_engine
 from app.models.alert_channel import AlertChannel
 
@@ -30,6 +32,18 @@ from app.services.driver_manager import driver_manager
 from app.services.ssrf_validator import validate_outbound_url
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_uuid(val: Any) -> Optional[UUID]:
+    """Safely converts an input to a UUID object or returns None if invalid."""
+    if not val:
+        return None
+    if isinstance(val, UUID):
+        return val
+    try:
+        return UUID(str(val))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 class AlertDispatcher:
@@ -345,6 +359,42 @@ class AlertDispatcher:
         endpoint_id = data.get("endpoint_id") or data.get("node_id")
         endpoint_name = data.get("hostname") or data.get("endpoint_name") or "Unknown Endpoint"
         ip_address = data.get("ip_address") or "0.0.0.0"
+
+        # Fallback lookup to enrich endpoint_name and ip_address if missing or placeholder
+        if (not endpoint_name or endpoint_name == "Unknown Endpoint" or not ip_address or ip_address == "0.0.0.0") and endpoint_id:
+            # 1. Check in-memory topology DAG
+            try:
+                from app.services.topology import topology_manager
+                node = topology_manager.get_node(str(endpoint_id))
+                if node:
+                    if not endpoint_name or endpoint_name == "Unknown Endpoint":
+                        endpoint_name = node.get("label") or node.get("hostname") or endpoint_name
+                    if not ip_address or ip_address == "0.0.0.0":
+                        ip_address = node.get("ip_address") or ip_address
+            except Exception as exc:
+                logger.debug("AlertDispatcher: Topology fallback lookup error: %s", exc)
+
+            # 2. Database lookup fallback
+            if not endpoint_name or endpoint_name == "Unknown Endpoint" or not ip_address or ip_address == "0.0.0.0":
+                try:
+                    async with AsyncSessionLocal() as db_lookup:
+                        res = await db_lookup.execute(
+                            text("SELECT hostname, host(ip_address) AS ip_address FROM endpoints WHERE id = CAST(:ep_id AS uuid)"),
+                            {"ep_id": str(endpoint_id)},
+                        )
+                        ep_row = res.fetchone()
+                        if ep_row:
+                            if not endpoint_name or endpoint_name == "Unknown Endpoint":
+                                endpoint_name = ep_row.hostname or endpoint_name
+                            if not ip_address or ip_address == "0.0.0.0":
+                                ip_address = ep_row.ip_address or ip_address
+                except Exception as exc:
+                    logger.debug("AlertDispatcher: DB fallback lookup error: %s", exc)
+
+            data["hostname"] = endpoint_name
+            data["endpoint_name"] = endpoint_name
+            data["ip_address"] = ip_address
+
         new_state = (
             data.get("operational_state")
             or data.get("current_state")
@@ -381,7 +431,7 @@ class AlertDispatcher:
                             db=db,
                             channel_id=channel.id,
                             channel_name=channel.name,
-                            endpoint_id=UUID(str(endpoint_id)) if endpoint_id else None,
+                            endpoint_id=_safe_uuid(endpoint_id),
                             endpoint_name=endpoint_name,
                             event_type=event_type,
                             status="THROTTLED",
@@ -451,17 +501,17 @@ class AlertDispatcher:
     ) -> None:
         # Check endpoint filter
         if channel.endpoint_ids and len(channel.endpoint_ids) > 0:
-            if endpoint_id and str(endpoint_id) not in [str(x) for x in channel.endpoint_ids]:
+            if not endpoint_id or str(endpoint_id) not in [str(x) for x in channel.endpoint_ids]:
                 return
 
         # Check subnet filter
         if channel.subnet_filters and len(channel.subnet_filters) > 0:
             try:
-                ep_ip = ipaddress.ip_address(ip_address)
+                ep_ip = ipaddress.ip_address(ip_address.strip() if isinstance(ip_address, str) else ip_address)
                 matched = False
                 for cidr in channel.subnet_filters:
                     try:
-                        network = ipaddress.ip_network(cidr, strict=False)
+                        network = ipaddress.ip_network(cidr.strip(), strict=False)
                         if ep_ip in network:
                             matched = True
                             break
@@ -475,7 +525,11 @@ class AlertDispatcher:
         # Check severity filter
         if channel.severity_filters and len(channel.severity_filters) > 0:
             allowed_sevs = [s.upper() for s in channel.severity_filters]
-            if severity.upper() not in allowed_sevs:
+            sev_upper = severity.upper()
+            if sev_upper in ("UP", "RECOVERED"):
+                if "UP" not in allowed_sevs and "RECOVERED" not in allowed_sevs:
+                    return
+            elif sev_upper not in allowed_sevs:
                 return
 
         # Check Flapping Suppression
@@ -484,7 +538,7 @@ class AlertDispatcher:
                 db=db,
                 channel_id=channel.id,
                 channel_name=channel.name,
-                endpoint_id=UUID(str(endpoint_id)) if endpoint_id else None,
+                endpoint_id=_safe_uuid(endpoint_id),
                 endpoint_name=endpoint_name,
                 event_type=event_type,
                 status="THROTTLED",
@@ -502,7 +556,7 @@ class AlertDispatcher:
                 db=db,
                 channel_id=channel.id,
                 channel_name=channel.name,
-                endpoint_id=UUID(str(endpoint_id)) if endpoint_id else None,
+                endpoint_id=_safe_uuid(endpoint_id),
                 endpoint_name=endpoint_name,
                 event_type=event_type,
                 status="THROTTLED",
@@ -533,7 +587,7 @@ class AlertDispatcher:
                 db=db,
                 channel_id=channel.id,
                 channel_name=channel.name,
-                endpoint_id=UUID(str(endpoint_id)) if endpoint_id else None,
+                endpoint_id=_safe_uuid(endpoint_id),
                 endpoint_name=endpoint_name,
                 event_type=event_type,
                 status=status,
@@ -545,7 +599,7 @@ class AlertDispatcher:
                 db=db,
                 channel_id=channel.id,
                 channel_name=channel.name,
-                endpoint_id=UUID(str(endpoint_id)) if endpoint_id else None,
+                endpoint_id=_safe_uuid(endpoint_id),
                 endpoint_name=endpoint_name,
                 event_type=event_type,
                 status="FAILED",
@@ -562,6 +616,14 @@ class AlertDispatcher:
         except Exception:
             return {}
 
+    def _resolve_portal_url(self) -> str:
+        domain = os.environ.get("DOMAIN_NAME", "").strip().rstrip("/")
+        if domain:
+            if not domain.startswith("http://") and not domain.startswith("https://"):
+                return f"https://{domain}"
+            return domain
+        return f"http://{settings.api.host}:{settings.api.port}"
+
     async def _send_to_provider(
         self,
         channel_type: str,
@@ -574,6 +636,7 @@ class AlertDispatcher:
         details: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Optional[int], Optional[str]]:
         ctype = channel_type.upper()
+        portal_url = self._resolve_portal_url()
 
         if ctype in ("TEAMS", "DISCORD", "SLACK", "GENERIC_WEBHOOK"):
             webhook_url = config.get("webhook_url")
@@ -590,6 +653,7 @@ class AlertDispatcher:
                     severity=severity,
                     timestamp=timestamp,
                     details=details,
+                    portal_url=portal_url,
                 )
             elif ctype == "DISCORD":
                 payload = build_discord_payload(
@@ -599,6 +663,7 @@ class AlertDispatcher:
                     severity=severity,
                     timestamp=timestamp,
                     details=details,
+                    portal_url=portal_url,
                 )
             elif ctype == "SLACK":
                 payload = build_slack_payload(
@@ -608,6 +673,7 @@ class AlertDispatcher:
                     severity=severity,
                     timestamp=timestamp,
                     details=details,
+                    portal_url=portal_url,
                 )
             else:  # GENERIC_WEBHOOK
                 payload = build_polyglot_payload(
@@ -617,6 +683,7 @@ class AlertDispatcher:
                     severity=severity,
                     timestamp=timestamp,
                     details=details,
+                    portal_url=portal_url,
                 )
 
             headers = {"Content-Type": "application/json"}
@@ -650,6 +717,14 @@ class AlertDispatcher:
                 return "FAILED", None, "Webhook delivery failed after retries."
 
         elif ctype == "EMAIL_SMTP":
+            smtp_host = config.get("smtp_host", "localhost")
+            try:
+                await asyncio.to_thread(validate_outbound_url, f"http://{smtp_host}", False)
+            except ValueError as err:
+                if "SSRF violation" in str(err) or "Invalid protocol" in str(err) or "blocked" in str(err):
+                    raise
+                logger.debug("AlertDispatcher: SMTP host '%s' DNS lookup in validation: %s", smtp_host, err)
+
             raw_to = config.get("to_emails") or config.get("to_email")
             if isinstance(raw_to, str):
                 to_emails = [e.strip() for e in raw_to.replace(";", ",").split(",") if e.strip()]
@@ -672,6 +747,7 @@ class AlertDispatcher:
                     severity=severity,
                     timestamp=timestamp,
                     details=details,
+                    portal_url=portal_url,
                 )
                 await asyncio.to_thread(self._sync_send_smtp, config, msg)
 
@@ -682,6 +758,12 @@ class AlertDispatcher:
 
     def _sync_send_smtp(self, config: Dict[str, Any], msg: Any) -> None:
         host = config.get("smtp_host", "localhost")
+        try:
+            validate_outbound_url(f"http://{host}", allow_private=False)
+        except ValueError as err:
+            if "SSRF violation" in str(err) or "Invalid protocol" in str(err) or "blocked" in str(err):
+                raise
+            logger.debug("AlertDispatcher: SMTP host '%s' DNS lookup in validation: %s", host, err)
         port = int(config.get("smtp_port", 587))
         use_tls = config.get("use_tls", True)
         use_ssl = config.get("use_ssl", False) or port == 465
@@ -790,18 +872,20 @@ class AlertDispatcher:
 
             # Record in delivery logs if channel exists in DB
             if cid:
-                async with AsyncSessionLocal() as db:
-                    await self._record_delivery_log(
-                        db=db,
-                        channel_id=UUID(str(cid)),
-                        channel_name=cname,
-                        endpoint_id=None,
-                        endpoint_name=endpoint_name,
-                        event_type="TEST_PROBE",
-                        status=status,
-                        status_code=code,
-                        response_message=msg,
-                    )
+                channel_uuid = _safe_uuid(cid)
+                if channel_uuid:
+                    async with AsyncSessionLocal() as db:
+                        await self._record_delivery_log(
+                            db=db,
+                            channel_id=channel_uuid,
+                            channel_name=cname,
+                            endpoint_id=None,
+                            endpoint_name=endpoint_name,
+                            event_type="TEST_PROBE",
+                            status=status,
+                            status_code=code,
+                            response_message=msg,
+                        )
 
             is_success = (status == "DELIVERED")
             return {

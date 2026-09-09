@@ -171,48 +171,51 @@ Creates a new notification channel. Credentials and webhook URLs are encrypted a
   ```json
   {
     "name": "NOC MS Teams Incidents",
-    "channel_type": "ms_teams",
+    "channel_type": "TEAMS",
     "is_enabled": true,
-    "target_scope": "all",
-    "target_endpoint_ids": [],
-    "severity_filter": ["down", "unstable"],
+    "endpoint_ids": [],
+    "subnet_filters": ["10.0.0.0/16", "192.168.1.0/24"],
+    "severity_filters": ["DOWN", "RECOVERED"],
     "config": {
-      "webhook_url": "https://company.webhook.office.com/webhookb2/...",
-      "card_style": "adaptive_card"
+      "webhook_url": "https://company.webhook.office.com/webhookb2/..."
     }
   }
   ```
-- **Channel Types:** `ms_teams`, `discord`, `slack`, `email`, `webhook`.
-- **Target Scopes:** `all` (receives alerts for all endpoints) or `specific` (requires explicit `target_endpoint_ids`).
+- **Channel Types:** `TEAMS`, `DISCORD`, `SLACK`, `EMAIL_SMTP`, `GENERIC_WEBHOOK`.
+- **Filtering Fields:**
+  - `endpoint_ids` (array of UUID strings, default `[]`): Restricts delivery to specific endpoints. If empty, all endpoints are included.
+  - `subnet_filters` (array of CIDR strings, default `[]`): Restricts delivery to endpoints whose IP addresses match the specified CIDR subnets (e.g. `["10.0.0.0/16"]`).
+  - `severity_filters` (array of strings, default `["DOWN", "RECOVERED"]`): Triggering states (`"DOWN"`, `"RECOVERED"` / `"UP"`, `"UNSTABLE"`).
 
 ### `GET /alerts/channels/{id}`
 Retrieves channel details by ID with masked secrets.
 
 ### `PUT /alerts/channels/{id}`
-Updates an existing notification channel configuration. If secrets are left as masked bullets `••••••••`, existing encrypted values are preserved.
+Updates an existing notification channel configuration (`name`, `channel_type`, `is_enabled`, `endpoint_ids`, `subnet_filters`, `severity_filters`, `config`). If secrets or custom header values contain masked bullets `••••••••`, existing decrypted values are preserved.
 
 ### `DELETE /alerts/channels/{id}`
-Permanently deletes an alert channel.
+Permanently deletes an alert channel and its associated delivery history logs.
 
 ### `POST /alerts/channels/test`
 Executes an immediate live diagnostic test alert probe to verify destination reachability, SSRF policy compliance, and template formatting.
-- **Request Body:** Accepts either `{"channel_id": "uuid"}` to test an existing channel, or `{"channel_type": "...", "config": {...}}` for pre-save validation.
+- **Request Body:** Accepts either `{"channel_id": "uuid"}` to test an existing channel, or `{"channel_type": "TEAMS", "config": {...}}` for pre-save validation.
 - **Response:**
   ```json
   {
-    "status": "success",
-    "delivered": true,
-    "channel_type": "ms_teams",
-    "status_code": 200,
-    "latency_ms": 142.5,
-    "error": null
+    "success": true,
+    "data": {
+      "success": true,
+      "status_code": 200,
+      "message": "Test alert delivered successfully."
+    },
+    "message": "Request processed successfully."
   }
   ```
 
 ### `GET /alerts/history` (Alias: `GET /alerts/logs`)
 Retrieves paginated delivery audit logs across all channels.
 - **Query Params:** `page` (default: 1), `page_size` (default: 50, max: 200).
-- **Log Fields:** `channel_name`, `channel_type`, `endpoint_name`, `event_type`, `severity`, `status` (`success`, `failed`, `suppressed`), `status_code`, `latency_ms`, `error_message`, `delivered_at`.
+- **Log Fields (`AlertDeliveryLog`):** `id`, `channel_id`, `channel_name`, `endpoint_id`, `endpoint_name`, `event_type`, `status` (`DELIVERED`, `FAILED`, `THROTTLED`), `status_code`, `retry_count`, `response_message`, `delivered_at`.
 
 ---
 
