@@ -185,10 +185,11 @@ async def test_leader_election_passive_standby():
     mock_res = MagicMock()
     mock_res.scalar.return_value = False  # Lock not acquired
     mock_conn.execute.return_value = mock_res
+    mock_conn.close = AsyncMock()
 
     with patch("app.services.alert_dispatcher.async_engine") as mock_engine:
         mock_engine.dialect.name = "postgresql"
-        mock_engine.connect.return_value = mock_conn
+        mock_engine.connect = AsyncMock(return_value=mock_conn)
 
         await dispatcher.start()
         assert dispatcher._is_leader is False
@@ -208,12 +209,16 @@ async def test_leader_election_active_leader():
     mock_conn = AsyncMock()
     mock_res = MagicMock()
     mock_res.scalar.return_value = True  # Lock acquired
-    mock_conn.execute.return_value = mock_res
+    mock_conn.execute = AsyncMock(return_value=mock_res)
+    mock_conn.close = AsyncMock()
+
+    async def fake_listen(channel):
+        await asyncio.sleep(3600)
 
     with patch("app.services.alert_dispatcher.async_engine") as mock_engine, \
-         patch.object(dispatcher, "_listen_broker", return_value=None):
+         patch.object(dispatcher, "_listen_broker", side_effect=fake_listen):
         mock_engine.dialect.name = "postgresql"
-        mock_engine.connect.return_value = mock_conn
+        mock_engine.connect = AsyncMock(return_value=mock_conn)
 
         await dispatcher.start()
         assert dispatcher._is_leader is True
@@ -223,4 +228,4 @@ async def test_leader_election_active_leader():
         assert "alert_broker_rca" in task_names
 
         await dispatcher.stop()
-        assert any("pg_advisory_unlock" in str(c) for c in mock_conn.execute.call_args_list)
+        assert any("pg_advisory_unlock" in str(call.args[0]) for call in mock_conn.execute.call_args_list)
