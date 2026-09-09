@@ -86,6 +86,14 @@ class TopologyGraphManager:
         """
         return self._cached_graph_json
 
+    def get_node(self, endpoint_id: Any) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves in-memory topology node metadata by endpoint_id in O(1) time.
+        """
+        if not endpoint_id:
+            return None
+        return self._nodes.get(str(endpoint_id))
+
     async def full_rebuild(self, db: AsyncSession) -> Dict[str, Any]:
         """
         Asynchronously rebuilds the entire DAG graph in memory from PostgreSQL.

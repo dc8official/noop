@@ -44,7 +44,7 @@ async def sse_event_generator(request: Request) -> AsyncGenerator[str, None]:
 
     try:
         # Initial greeting event
-        init_payload = json.dumps({"type": "CONNECTED", "message": "LNMP v3.0.0 SSE stream established."})
+        init_payload = json.dumps({"type": "CONNECTED", "message": "LNMP v3.1.0 SSE stream established."})
         yield f"data: {init_payload}\n\n"
 
         while True:

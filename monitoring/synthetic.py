@@ -122,7 +122,7 @@ def _sync_http_probe(
 
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "LNMP-Synthetic-Monitor/3.0.0"},
+        headers={"User-Agent": "LNMP-Synthetic-Monitor/3.1.0"},
         method="GET",
     )
 

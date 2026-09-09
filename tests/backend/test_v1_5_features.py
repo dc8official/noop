@@ -63,7 +63,10 @@ class TestV15BackendCore(unittest.TestCase):
         inc_res = MagicMock()
         inc_res.fetchone.return_value = MagicMock(id=uuid4())
 
-        mock_db.execute.side_effect = [ep_res, bl_res, inc_res]
+        sym_res = MagicMock()
+        sym_res.fetchall.return_value = []
+
+        mock_db.execute.side_effect = [ep_res, bl_res, inc_res, sym_res]
 
         mock_trace.return_value = {
             "target_ip": "192.168.1.100",
@@ -105,7 +108,10 @@ class TestV15BackendCore(unittest.TestCase):
         inc_res = MagicMock()
         inc_res.fetchone.return_value = MagicMock(id=uuid4())
 
-        mock_db.execute.side_effect = [ep_res, bl_res, inc_res]
+        sym_res = MagicMock()
+        sym_res.fetchall.return_value = []
+
+        mock_db.execute.side_effect = [ep_res, bl_res, inc_res, sym_res]
 
         # Live failure traceroute times out at Hop 2 (10.254.0.1 is None/*)
         mock_trace.return_value = {

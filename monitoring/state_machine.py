@@ -48,6 +48,8 @@ class EndpointState:
     confirmed_detailed_state: str
     pending_detailed_state: Optional[str] = field(default=None)
     pending_cycle_count: int = field(default=0)
+    hostname: Optional[str] = field(default=None)
+    ip_address: Optional[str] = field(default=None)
 
 
 class StateMachine:
@@ -93,6 +95,37 @@ class StateMachine:
         if row is None:
             return None
 
+        ep_hostname = None
+        ep_ip = None
+        try:
+            from app.services.topology import topology_manager
+            node = topology_manager.get_node(str(endpoint_id))
+            if node:
+                ep_hostname = node.get("label") or node.get("hostname")
+                ep_ip = node.get("ip_address")
+        except Exception:
+            pass
+
+        if not ep_hostname or not ep_ip:
+            try:
+                ep_row = (
+                    await db.execute(
+                        text(
+                            """
+                            SELECT hostname, host(ip_address) AS ip_address
+                            FROM endpoints
+                            WHERE id = CAST(:endpoint_id AS uuid)
+                            """
+                        ),
+                        {"endpoint_id": str(endpoint_id)},
+                    )
+                ).fetchone()
+                if ep_row:
+                    ep_hostname = ep_hostname or ep_row.hostname
+                    ep_ip = ep_ip or ep_row.ip_address
+            except Exception:
+                pass
+
         return EndpointState(
             endpoint_id=endpoint_id,
             active_event_id=row.id,
@@ -100,6 +133,8 @@ class StateMachine:
             confirmed_detailed_state=row.detailed_state,
             pending_detailed_state=None,
             pending_cycle_count=0,
+            hostname=ep_hostname,
+            ip_address=ep_ip,
         )
 
     async def create_initial_event(
@@ -176,6 +211,37 @@ class StateMachine:
             detailed_state,
         )
 
+        ep_hostname = None
+        ep_ip = None
+        try:
+            from app.services.topology import topology_manager
+            node = topology_manager.get_node(str(endpoint_id))
+            if node:
+                ep_hostname = node.get("label") or node.get("hostname")
+                ep_ip = node.get("ip_address")
+        except Exception:
+            pass
+
+        if not ep_hostname or not ep_ip:
+            try:
+                ep_row = (
+                    await db.execute(
+                        text(
+                            """
+                            SELECT hostname, host(ip_address) AS ip_address
+                            FROM endpoints
+                            WHERE id = CAST(:endpoint_id AS uuid)
+                            """
+                        ),
+                        {"endpoint_id": str(endpoint_id)},
+                    )
+                ).fetchone()
+                if ep_row:
+                    ep_hostname = ep_hostname or ep_row.hostname
+                    ep_ip = ep_ip or ep_row.ip_address
+            except Exception:
+                pass
+
         return EndpointState(
             endpoint_id=endpoint_id,
             active_event_id=row.id,
@@ -183,6 +249,8 @@ class StateMachine:
             confirmed_detailed_state=detailed_state,
             pending_detailed_state=None,
             pending_cycle_count=0,
+            hostname=ep_hostname,
+            ip_address=ep_ip,
         )
 
     async def process_cycle(
@@ -217,6 +285,8 @@ class StateMachine:
                 confirmed_detailed_state=state.confirmed_detailed_state,
                 pending_detailed_state=None,
                 pending_cycle_count=0,
+                hostname=state.hostname,
+                ip_address=state.ip_address,
             )
 
         # CASE B: A potential transition is occurring.
@@ -234,6 +304,8 @@ class StateMachine:
                     confirmed_detailed_state=state.confirmed_detailed_state,
                     pending_detailed_state=new_detailed_state,
                     pending_cycle_count=new_pending_count,
+                    hostname=state.hostname,
+                    ip_address=state.ip_address,
                 )
             else:
                 # Transition confirmed!
@@ -244,6 +316,8 @@ class StateMachine:
                     confirmed_detailed_state=new_detailed_state,
                     pending_detailed_state=None,
                     pending_cycle_count=0,
+                    hostname=state.hostname,
+                    ip_address=state.ip_address,
                 )
                 logger.info(
                     "Committed transition for endpoint %s: %s -> %s",
@@ -281,9 +355,46 @@ class StateMachine:
                         "sse_node_state_change",
                     )
 
+                    ep_hostname = getattr(state, "hostname", None)
+                    ep_ip = getattr(state, "ip_address", None)
+                    if not ep_hostname or not ep_ip:
+                        try:
+                            from app.services.topology import topology_manager
+                            node = topology_manager.get_node(str(state.endpoint_id))
+                            if node:
+                                ep_hostname = ep_hostname or node.get("label") or node.get("hostname")
+                                ep_ip = ep_ip or node.get("ip_address")
+                        except Exception:
+                            pass
+
+                    if not ep_hostname or not ep_ip:
+                        try:
+                            ep_row = (
+                                await db.execute(
+                                    text(
+                                        """
+                                        SELECT hostname, host(ip_address) AS ip_address
+                                        FROM endpoints
+                                        WHERE id = CAST(:endpoint_id AS uuid)
+                                        """
+                                    ),
+                                    {"endpoint_id": str(state.endpoint_id)},
+                                )
+                            ).fetchone()
+                            if ep_row:
+                                ep_hostname = ep_hostname or ep_row.hostname
+                                ep_ip = ep_ip or ep_row.ip_address
+                        except Exception:
+                            pass
+
+                    next_state.hostname = ep_hostname
+                    next_state.ip_address = ep_ip
+
                     transition_payload = {
                         "type": "STATE_TRANSITION",
                         "endpoint_id": str(state.endpoint_id),
+                        "hostname": ep_hostname,
+                        "ip_address": ep_ip,
                         "operational_state": new_operational_state,
                         "detailed_state": new_detailed_state,
                         "avg_rtt_ms": result.avg_rtt_ms,
@@ -361,6 +472,8 @@ class StateMachine:
                 confirmed_detailed_state=state.confirmed_detailed_state,
                 pending_detailed_state=new_detailed_state,
                 pending_cycle_count=1,
+                hostname=state.hostname,
+                ip_address=state.ip_address,
             )
 
         # Step 3: Insert the record for this cycle to the database.

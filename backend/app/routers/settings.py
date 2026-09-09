@@ -29,6 +29,8 @@ class SettingsUpdate(BaseModel):
     sessionTimeout: Optional[int] = Field(default=None, ge=1, le=1440)
     lockout_threshold: Optional[int] = Field(default=None, ge=1, le=100)
     lockoutThreshold: Optional[int] = Field(default=None, ge=1, le=100)
+    alerting_enabled: Optional[bool] = None
+    alertingEnabled: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,6 +44,8 @@ class SettingsPayload(BaseModel):
     sessionTimeout: int
     lockout_threshold: int
     lockoutThreshold: int
+    alerting_enabled: bool
+    alertingEnabled: bool
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,6 +85,10 @@ async def _read_settings_dict(db: AsyncSession) -> dict[str, Any]:
         except ValueError:
             pass
 
+    alerting_enabled = True
+    if "alerting_enabled" in kv:
+        alerting_enabled = kv["alerting_enabled"].strip().lower() in ("true", "1", "yes")
+
     return {
         "performance_mode": perf_mode,
         "performanceMode": perf_mode,
@@ -90,6 +98,8 @@ async def _read_settings_dict(db: AsyncSession) -> dict[str, Any]:
         "sessionTimeout": session_timeout,
         "lockout_threshold": lockout_threshold,
         "lockoutThreshold": lockout_threshold,
+        "alerting_enabled": alerting_enabled,
+        "alertingEnabled": alerting_enabled,
     }
 
 
@@ -136,6 +146,10 @@ async def update_settings(
     if lockout_val is None and payload.lockoutThreshold is not None:
         lockout_val = payload.lockoutThreshold
 
+    alerting_val = payload.alerting_enabled
+    if alerting_val is None and payload.alertingEnabled is not None:
+        alerting_val = payload.alertingEnabled
+
     reinit_driver = False
 
     if perf_mode_val is not None:
@@ -154,6 +168,9 @@ async def update_settings(
 
     if lockout_val is not None:
         await _upsert_setting(db, "lockout_threshold", str(lockout_val))
+
+    if alerting_val is not None:
+        await _upsert_setting(db, "alerting_enabled", "true" if alerting_val else "false")
 
     await db.commit()
 

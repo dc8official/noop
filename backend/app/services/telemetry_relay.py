@@ -41,6 +41,12 @@ class TelemetryRelay:
                 name="telemetry_relay_node_state_change",
             )
         )
+        self._tasks.append(
+            asyncio.create_task(
+                self._listen_channel("RCA_INCIDENT"),
+                name="telemetry_relay_rca_incident",
+            )
+        )
         logger.info("TelemetryRelay started listening to inter-process broker channels.")
 
     async def stop(self) -> None:

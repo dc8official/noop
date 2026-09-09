@@ -1,10 +1,12 @@
 <template>
   <div id="app">
+    <Toast />
+    <ConfirmDialog />
     <header class="app-header" v-if="showNav">
       <div class="header-inner">
         <div class="brand">
           <span class="brand-name">lnmp</span>
-          <span class="brand-version">{{ appVersion || 'v3.0.7s' }}</span>
+          <span class="brand-version">{{ appVersion || 'v3.1.0' }}</span>
         </div>
         <nav class="header-nav" aria-label="Main Navigation">
           <RouterLink to="/" class="nav-link">Dashboard</RouterLink>
@@ -108,14 +110,18 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute, RouterLink, RouterView } from 'vue-router'
+import Toast from 'primevue/toast'
+import ConfirmDialog from 'primevue/confirmdialog'
+import { useToast } from 'primevue/usetoast'
 import { logout, changePassword, getVersion } from './services/api.js'
 import { currentUser, isAdmin, mustChangePassword, loadUserFromStorage, setUserState, clearUserState } from './services/auth.js'
 import { useSSE } from './composables/useSSE.js'
 
 const router = useRouter()
 const route = useRoute()
+const toast = useToast()
 const isDark = ref(true)
-const appVersion = ref('v3.0.7s')
+const appVersion = ref('v3.1.0')
 const liveAnnouncement = ref('')
 const { subscribe } = useSSE()
 let unsubscribeSSE = null
@@ -153,7 +159,7 @@ onMounted(async () => {
       appVersion.value = `v${res.data.data.version.replace(/^v/, '')}`
     }
   } catch (err) {
-    appVersion.value = 'v3.0.7s'
+    appVersion.value = 'v3.1.0'
   }
 
   // Global SSE listener for accessibility screen reader announcements
@@ -216,7 +222,12 @@ async function executeChangePassword() {
       confirm_password: ''
     }
 
-    alert('Password updated successfully! You now have full access to the platform.')
+    toast.add({
+      severity: 'success',
+      summary: 'Password Updated',
+      detail: 'Password updated successfully! You now have full access to the platform.',
+      life: 3500,
+    })
   } catch (err) {
     console.error('Failed to change password:', err)
     changePasswordError.value = err.response?.data?.detail || 'Failed to update password. Verify current password.'

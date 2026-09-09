@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ============================================================
-# lnmp Network Monitoring Platform v3.0.0 - Production Installer
+# lnmp Network Monitoring Platform v3.1.0 - Production Installer
 # Supports: Debian 12+, Ubuntu 22.04+
 # Usage: sudo bash deploy/install.sh [--dry-run]
 # ============================================================
@@ -279,6 +279,10 @@ if [ -f "$ENV_FILE" ]; then
     echo "Environment file already exists at $ENV_FILE."
     echo "Skipping configuration prompts."
     source "$ENV_FILE"
+    if [ "$DRY_RUN" = false ]; then
+        chmod 0600 "$ENV_FILE"
+        chown netmon:netmon "$ENV_FILE" 2>/dev/null || true
+    fi
 else
     if [ "$DRY_RUN" = false ]; then
         echo ""
@@ -309,8 +313,8 @@ NETMON_SECRET_KEY=$SECRET_KEY
 DOMAIN_NAME=$DOMAIN_NAME
 DEFAULT_ADMIN_PASSWORD=$ADMIN_PASS
 EOF
-        chmod 640 "$ENV_FILE"
-        chown root:netmon "$ENV_FILE"
+        chmod 0600 "$ENV_FILE"
+        chown netmon:netmon "$ENV_FILE" 2>/dev/null || true
         echo "Environment file created at $ENV_FILE"
     else
         DB_PASS="dryrun_password"
@@ -509,7 +513,7 @@ if [ "$DRY_RUN" = true ]; then
     echo "DRY RUN complete. No changes were made."
 else
     echo ""
-    echo "lnmp is now running."
+    echo "lnmp v3.1.0 is now running."
     echo ""
     echo "  Dashboard:  https://$DOMAIN_NAME"
     echo "  API docs:   https://$DOMAIN_NAME/api/docs"
