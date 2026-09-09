@@ -1,6 +1,6 @@
-# LNMP Architecture Overview — Version 3.0.0
+# LNMP Architecture Overview — Version 3.1.0
 
-The Network Monitoring Platform (LNMP) v3.0.0 is architected with a decoupled, asynchronous design engineered for high-concurrency telemetry collection, real-time Server-Sent Events (SSE), dual-driver storage acceleration, crossing-free topology visualization, and enterprise security governance.
+The Network Monitoring Platform (LNMP) v3.1.0 is architected with a decoupled, asynchronous design engineered for high-concurrency telemetry collection, real-time Server-Sent Events (SSE), dual-driver storage acceleration, enterprise multi-channel notifications, crossing-free topology visualization, and enterprise security governance.
 
 ---
 
@@ -51,6 +51,19 @@ The platform supports pluggable, dual-driver storage via `StorageDriverManager`:
   3. **Phase 3: Coordinate Assignment (`blockShifting: true`, `parentCentralization: true`)**: Gansner coordinate alignment centering parents directly over child clusters.
   4. **Phase 4: Directional Spline Routing (`cubicBezier`)**: Tangent-constrained spline channels with Horizontal (`LR`) ⇄ Vertical (`UD`) switching.
 * **Frozen Physics Real-Time Recoloring:** Updates node state colors in place on SSE `NODE_STATE_CHANGE` events with `physics: { enabled: false }` to prevent canvas shaking.
+
+### 8. Enterprise Alerting Subsystem & Decoupling Invariant
+* **Decoupling Invariant:** Outbound webhooks and email notifications can experience unpredictable network delays, TLS handshakes, or third-party API rate limits (100ms – 10s+). Running alert dispatching inside the `netmon-engine` monitoring sweep would stall raw ICMP socket reading and blow the critical 32-second sweep budget. To preserve deterministic timing, the **Alert Dispatcher operates entirely within the `netmon-api` service as an independent asynchronous background task pool**.
+* **Inter-Process Decoupling Pipeline:**
+  1. `netmon-engine` executes ICMP/TCP probes and publishes transitions to `EventBroker` (`LISTEN/NOTIFY` or Redis Pub/Sub) in sub-millisecond time.
+  2. `TelemetryRelay` running in `netmon-api` receives the event and enqueues it into an in-memory `asyncio.Queue`.
+  3. `AlertDispatcher` pulls from the queue and applies multi-layer filtering:
+     - **Scope Filter:** Evaluates target scope (`all` vs. explicit endpoint UUIDs) and severity bitmasks.
+     - **RCA Cascade Suppression:** Suppresses individual downstream endpoint notifications when an upstream parent node generates an active `RCA_INCIDENT`.
+     - **Flapping Cooldown:** Suppresses alerts if an endpoint exhibits $\ge 3$ state changes within a 10-minute sliding window (max 1 alert per 5 minutes per endpoint/severity).
+     - **Cryptographic & SSRF Defense:** Derives AES-256-GCM decryption keys via HKDF-SHA256 and validates outbound destination IPs against loopback and cloud metadata ranges.
+     - **Polyglot Formatters:** Adapts payload to Microsoft Teams (Adaptive Cards v1.4 & HTML fallback), Discord (Rich Embeds), Slack (Block Kit), or SMTP TLS 1.2+ MIME.
+     - **Delivery Audit Logging:** Persists asynchronous results, HTTP response codes, and round-trip latencies into `alert_delivery_logs`.
 
 ---
 
@@ -112,4 +125,66 @@ flowchart TD
     TR -.->|Informs| RCA
     ENG --> REPO
     ENG --> MGR
+```
+
+---
+
+## Alert Dispatcher Subsystem Diagram
+
+```mermaid
+flowchart TD
+    subgraph Engine_Sweep["netmon-engine (Strict 32s Sweeper Budget)"]
+        PROBE["ICMP / TCP Probes"]
+        TRANS["State Classifier"]
+        BROKER_PUB["EventBroker.publish()"]
+        PROBE --> TRANS --> BROKER_PUB
+    end
+
+    BROKER_PUB -->|Inter-Process Channel| BROKER_SUB
+
+    subgraph API_Process["netmon-api (Decoupled Async Background Task)"]
+        BROKER_SUB["TelemetryRelay Listener"]
+        ASYNC_Q["asyncio.Queue (alert_queue)"]
+        DISPATCHER["AlertDispatcher Worker"]
+        
+        BROKER_SUB -->|Enqueue in <0.1ms| ASYNC_Q
+        ASYNC_Q -->|Worker Dequeue| DISPATCHER
+
+        subgraph Pipeline["Multi-Layer Alert Processing Pipeline"]
+            MASTER{"alerting_enabled?"}
+            SCOPE{"Target Scope & Severity Match?"}
+            RCA_SUPP{"Upstream RCA Active?"}
+            FLAP_SUPP{"Flapping (<5m Cooldown)?"}
+            SSRF_CRYPTO["SSRF DNS Pinning & AES-256 Decrypt"]
+            FORMATTER["Polyglot Formatters (Teams / Discord / Slack / SMTP)"]
+            DISPATCH_CALL["Async httpx / direct smtplib"]
+
+            DISPATCHER --> MASTER
+            MASTER -->|Yes| SCOPE
+            SCOPE -->|Match| RCA_SUPP
+            RCA_SUPP -->|No Gateway Incident| FLAP_SUPP
+            FLAP_SUPP -->|Clear| SSRF_CRYPTO
+            SSRF_CRYPTO --> FORMATTER
+            FORMATTER --> DISPATCH_CALL
+        end
+
+        AUDIT[("alert_delivery_logs")]
+        DISPATCH_CALL -->|Result / Latency / Status| AUDIT
+        RCA_SUPP -.->|Suppressed Log| AUDIT
+        FLAP_SUPP -.->|Suppressed Log| AUDIT
+    end
+
+    subgraph External_Destinations["Outbound Alert Destinations"]
+        TEAMS["Microsoft Teams (Adaptive Card / HTML)"]
+        DISCORD["Discord (Rich Embeds)"]
+        SLACK["Slack (Block Kit)"]
+        EMAIL["Corporate SMTP Relay (TLS 1.2+)"]
+        WEBHOOK["Generic HTTPS Webhook"]
+
+        DISPATCH_CALL --> TEAMS
+        DISPATCH_CALL --> DISCORD
+        DISPATCH_CALL --> SLACK
+        DISPATCH_CALL --> EMAIL
+        DISPATCH_CALL --> WEBHOOK
+    end
 ```

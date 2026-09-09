@@ -1,6 +1,6 @@
-# LNMP API Reference — Version 3.0.0
+# LNMP API Reference — Version 3.1.0
 
-The LNMP (Network Monitoring Platform) v3.0.0 exposes a RESTful and Server-Sent Events (SSE) API built on FastAPI. The API is located under the `/api/v1` base path and requires JWT Bearer authentication or HttpOnly session cookies for protected endpoints.
+The LNMP (Network Monitoring Platform) v3.1.0 exposes a RESTful and Server-Sent Events (SSE) API built on FastAPI. The API is located under the `/api/v1` base path and requires JWT Bearer authentication or HttpOnly session cookies for protected endpoints.
 
 ## Base URL
 `http(s)://<server-ip>:<port>/api/v1`
@@ -15,12 +15,12 @@ Returns the current platform version metadata.
   ```json
   {
     "status": "ok",
-    "version": "3.0.0"
+    "version": "3.1.0"
   }
   ```
 
 ### `GET /api/v1/health`
-Performs system health check (database connection, monitoring engine status).
+Performs system health check (database connection, monitoring engine status). Returns `{"status": "ok", "version": "3.1.0"}`.
 
 ### `GET /api/v1/events/stream`
 Connects to the real-time Server-Sent Events (SSE) telemetry stream.
@@ -129,14 +129,129 @@ Retrieves state transition timeline entries.
 ### `GET /reports/audit-logs`
 Retrieves paginated administrative audit logs (requires `Admin` role).
 
-### `POST /reports/telemetry/export-batch`
-Streams a sanitised CSV containing bulk telemetry data across multiple endpoints.
+### `POST /reports/telemetry/export-batch` (Alias: `POST /reports/telemetry/export/batch`)
+Streams a sanitised CSV containing bulk telemetry data across multiple endpoints using deterministic keyset pagination.
+- **Request Body:**
+  ```json
+  {
+    "endpoint_ids": ["3fa85f64-5717-4562-b3fc-2c963f66afa6"],
+    "start_time": "2026-09-01T00:00:00Z",
+    "end_time": "2026-09-08T00:00:00Z",
+    "columns": [
+      "Endpoint_ID",
+      "Hostname",
+      "IP_Address",
+      "Device_Type",
+      "Timestamp",
+      "Operational_State",
+      "Detailed_State",
+      "Packet_Success_Rate",
+      "Avg_RTT_ms"
+    ]
+  }
+  ```
+- **Column Customization Behavior:**
+  - If `columns` is omitted or empty, all standard columns are included.
+  - Non-negotiable identity columns (`Hostname` and `IP_Address`) are strictly enforced and automatically injected into every CSV stream.
+  - CSV cells are sanitized against spreadsheet formula injection (`=`, `+`, `-`, `@`, `\t`, `\r`).
 
 ---
 
-## 6. User Governance (`/users`)
+## 6. Enterprise Alerting & Notifications (`/alerts`)
 
-Manage user accounts (requires `Admin` role).
+Manage multi-channel alert delivery endpoints, live diagnostic test probes, and delivery history logs (requires `Admin` role).
+
+### `GET /alerts/channels`
+Lists all configured notification channels. Sensitive fields (webhook URLs, SMTP passwords, authorization tokens) are masked at the API boundary with `••••••••`.
+- **Response:** `200 OK` returning an array of alert channel objects.
+
+### `POST /alerts/channels`
+Creates a new notification channel. Credentials and webhook URLs are encrypted at rest using AES-256-GCM.
+- **Request Body:**
+  ```json
+  {
+    "name": "NOC MS Teams Incidents",
+    "channel_type": "ms_teams",
+    "is_enabled": true,
+    "target_scope": "all",
+    "target_endpoint_ids": [],
+    "severity_filter": ["down", "unstable"],
+    "config": {
+      "webhook_url": "https://company.webhook.office.com/webhookb2/...",
+      "card_style": "adaptive_card"
+    }
+  }
+  ```
+- **Channel Types:** `ms_teams`, `discord`, `slack`, `email`, `webhook`.
+- **Target Scopes:** `all` (receives alerts for all endpoints) or `specific` (requires explicit `target_endpoint_ids`).
+
+### `GET /alerts/channels/{id}`
+Retrieves channel details by ID with masked secrets.
+
+### `PUT /alerts/channels/{id}`
+Updates an existing notification channel configuration. If secrets are left as masked bullets `••••••••`, existing encrypted values are preserved.
+
+### `DELETE /alerts/channels/{id}`
+Permanently deletes an alert channel.
+
+### `POST /alerts/channels/test`
+Executes an immediate live diagnostic test alert probe to verify destination reachability, SSRF policy compliance, and template formatting.
+- **Request Body:** Accepts either `{"channel_id": "uuid"}` to test an existing channel, or `{"channel_type": "...", "config": {...}}` for pre-save validation.
+- **Response:**
+  ```json
+  {
+    "status": "success",
+    "delivered": true,
+    "channel_type": "ms_teams",
+    "status_code": 200,
+    "latency_ms": 142.5,
+    "error": null
+  }
+  ```
+
+### `GET /alerts/history` (Alias: `GET /alerts/logs`)
+Retrieves paginated delivery audit logs across all channels.
+- **Query Params:** `page` (default: 1), `page_size` (default: 50, max: 200).
+- **Log Fields:** `channel_name`, `channel_type`, `endpoint_name`, `event_type`, `severity`, `status` (`success`, `failed`, `suppressed`), `status_code`, `latency_ms`, `error_message`, `delivered_at`.
+
+---
+
+## 7. System Administration & Settings (`/settings`)
+
+Manage global runtime parameters and daemon operation modes.
+
+### `GET /settings`
+Retrieves the active system configuration from the database.
+- **Response:**
+  ```json
+  {
+    "performance_mode": true,
+    "performanceMode": true,
+    "l2_auto_bypass": true,
+    "l2AutoBypass": true,
+    "session_timeout": 120,
+    "sessionTimeout": 120,
+    "lockout_threshold": 5,
+    "lockoutThreshold": 5,
+    "alerting_enabled": true,
+    "alertingEnabled": true
+  }
+  ```
+
+### `PATCH /settings`
+Updates runtime parameters (requires `Admin` role).
+- **Request Body:** Accepts snake_case or camelCase properties:
+  - `alerting_enabled` (bool, optional): Global master toggle to enable or suspend all outbound alert notifications.
+  - `performance_mode` (bool, optional): Switches between Redis-accelerated and PostgreSQL-native storage drivers.
+  - `l2_auto_bypass` (bool, optional): Controls Layer-2 direct ICMP diagnostic bypass.
+  - `session_timeout` (int, 1–1440 min): Idle session expiration duration.
+  - `lockout_threshold` (int, 1–100): Maximum failed attempts before IP lockout.
+
+---
+
+## 8. User Governance (`/users`)
+
+Manage user accounts and role-based access control (requires `Admin` role).
 
 ### `GET /users/`
 Lists all user accounts.

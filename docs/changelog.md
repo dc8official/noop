@@ -6,7 +6,22 @@ The versioning format follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Version 3.0.7s] — Current Production Release
+## [Version 3.1.0] — Enterprise Alerting & Notifications Engine
+### 🔔 Multi-Channel Notifications, Outbound Security & Reporting Customization
+
+| Upgrade Domain | Technical Implementation | Operational & Security Benefit |
+| :--- | :--- | :--- |
+| **Multi-Channel Alert Dispatcher** | Asynchronous background worker pool decoupled from the 32-second ICMP probe sweep budget via `asyncio.Queue` running entirely within `netmon-api`. | Guarantees zero latency jitter or sweep delay on high-frequency ICMP/TCP polling loops while delivering near real-time incident notifications. |
+| **Universal Polyglot Webhooks** | Native support for Microsoft Teams Adaptive Cards v1.4, Teams HTML fallback ("Post as User" for bot-restricted tenants), Discord Rich Embeds, Slack Block Kit, and direct SMTP TLS. | Integrates effortlessly with corporate and developer chat platforms without external bridging proxies or third-party middleware. |
+| **Hardened Outbound Security** | AES-256-GCM encryption at rest with HKDF-SHA256 key derivation for webhook URLs and SMTP credentials; socket-level DNS/IP validation blocking loopback and link-local metadata; CRLF header injection sanitization. | Eliminates secret exfiltration from database dumps, completely prevents Server-Side Request Forgery (SSRF) against internal resources, and secures email headers. |
+| **Intelligent Alert Suppression** | Root-cause grouping suppressing individual children alerts during upstream DAG gateway outages; sliding-window flapping detection (max 1 alert per 5 min per endpoint/severity). | Eliminates alert fatigue, prevents notification spam during route flaps, and focuses operator attention on root causes. |
+| **Hardware Master Toggle** | Master `alerting_enabled` boolean in system settings and database `app_settings` allowing instant suspension of all outbound notification traffic. | Allows low-spec edge or maintenance deployments to completely disable alerting workloads on demand with zero downtime. |
+| **Spacious 4-Tab Administration Console** | Redesigned `SettingsView.vue` into 4 dedicated tabs (`🔔 Alert Channels`, `⚡ Performance & Storage`, `🛡️ Security & Discovery`, `👥 User Governance`), featuring an 800px modal and live diagnostic test probe button. | Streamlines system configuration, provides instant visual test validation before saving, and cleans up administrative workflows. |
+| **Interactive CSV Column Customizer** | Redesigned 820px export configuration modal in `ReportsView.vue` with locked device identity columns (`Hostname`, `IP_Address`), toggleable metrics, Select All, and Reset actions. | Provides tailored, audit-compliant reporting outputs while guaranteeing immutable endpoint identity columns in every generated export. |
+
+---
+
+## [Version 3.0.7s]
 ### 🛡️ Production Security Hardening & Resilience Upgrades
 
 | Upgrade Domain | Technical Implementation | Operational & Security Benefit |

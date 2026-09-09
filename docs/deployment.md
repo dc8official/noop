@@ -1,6 +1,6 @@
-# LNMP Deployment & Operations Guide — Version 3.0.0
+# LNMP Deployment & Operations Guide — Version 3.1.0
 
-This guide details the procedures for installing, maintaining, and upgrading the Network Monitoring Platform (LNMP) v3.0.0 on a production Linux server.
+This guide details the procedures for installing, maintaining, and upgrading the Network Monitoring Platform (LNMP) v3.1.0 on a production Linux server.
 
 ---
 
@@ -47,15 +47,15 @@ cd lnmp/deploy
 1. Installs system packages: `python3-pip`, `postgresql`, `timescaledb`, `redis-server`, `nginx`, `traceroute`, `libcap2-bin`.
 2. Creates dedicated system user `netmon` and virtual environment at `/opt/netmon/venv`.
 3. Compiles the Vue 3 production bundle (`npm run build`).
-4. Generates `/etc/netmon/netmon.env` and `/etc/netmon/config.toml` with v3.0.0 defaults.
+4. Generates `/etc/netmon/netmon.env` and `/etc/netmon/config.toml` with v3.1.0 defaults.
 5. Sets network capabilities: `setcap cap_net_raw+ep $(command -v traceroute)`.
 6. Enables and starts systemd units (`netmon-api`, `netmon-engine`, `redis-server`, `nginx`).
 
 ---
 
-## 3. Upgrading to Version 3.0.0 (Zero Historical Data Loss)
+## 3. Upgrading to Version 3.1.0 (Zero Historical Data Loss)
 
-To perform an in-place upgrade from v2.x to v3.0.0:
+To perform an in-place upgrade to v3.1.0:
 
 ```bash
 cd ~/lnmp
@@ -67,14 +67,14 @@ sudo ./deploy/upgrade.sh
 
 ### Automated Upgrade Lifecycle Steps:
 1. **Pre-Upgrade Database Backup**: Automatically creates a timestamped SQL backup at `/var/backups/netmon/netmon_backup_<TIMESTAMP>.sql` before any changes. If the backup fails, the upgrade aborts immediately.
-2. **System Dependencies & Redis**: Installs missing packages (`redis-server`, `traceroute`, `libcap2-bin`) and ensures Redis is enabled and started (`systemctl enable --now redis-server`).
+2. **System Dependencies & Redis**: Installs missing packages (`redis-server`, `traceroute`, `libcap2-bin`, verifies Python package `httpx>=0.27.0`) and ensures Redis is enabled and started (`systemctl enable --now redis-server`).
 3. **Network Capabilities**: Sets `CAP_NET_RAW` capabilities on `traceroute` for unprivileged ICMP discovery.
-4. **Smart Config Migration**: Patches `/etc/netmon/config.toml` with v3.0 defaults (5 pings @ 8s, 120-minute session timeout, 2-session limit, `[redis]` section).
+4. **Smart Config Migration**: Patches `/etc/netmon/config.toml` with v3.1 defaults (5 pings @ 8s, 120-minute session timeout, 2-session limit, `[redis]` and `[alerting]` sections).
 5. **Daemon Pause**: Gracefully stops `netmon-engine` and `netmon-api`.
 6. **Code & Dependency Sync**: Pulls latest codebase, updates Python dependencies, and compiles frontend assets.
-7. **Forward Alembic Migrations**: Runs `alembic upgrade head` to add v3.0 tables (`system_settings`, indexes) while preserving all historical TimescaleDB chunks.
+7. **Forward Alembic Migrations**: Runs `alembic upgrade head` applying migration `0007_v3_1_alert_channels_and_delivery.py` to create `alert_channels` and `alert_delivery_logs` while preserving all historical TimescaleDB chunks.
 8. **Unit Refresh & Daemon Restart**: Reloads systemd daemon, enables auto-start on boot, and starts `redis-server`, `netmon-api`, `netmon-engine`, and `nginx`.
-9. **Health Verification**: Verifies API health and version endpoints.
+9. **Health Verification**: Verifies API health and version endpoints (`/api/v1/version`).
 
 ---
 
@@ -127,4 +127,45 @@ sudo journalctl -u netmon-engine -f
 tail -f /var/log/netmon/api.log
 tail -f /var/log/netmon/engine.log
 tail -f /var/log/netmon/error.log
+```
+
+---
+
+## 7. Egress Firewall Rules (Enterprise Alerting)
+
+LNMP v3.1.0 dispatches outbound incident notifications directly to external endpoints. Enterprise network administrators must configure egress firewall policies allowing outbound traffic from the LNMP host:
+
+| Destination Service | Protocol & Ports | Purpose |
+| :--- | :--- | :--- |
+| **Microsoft Teams Workflows** | TCP 443 (HTTPS) | Webhook incident payload dispatch (`*.office.com`, `*.microsoft.com`) |
+| **Discord Webhooks** | TCP 443 (HTTPS) | Rich embed alerts (`discord.com`, `discordapp.com`) |
+| **Slack Webhooks** | TCP 443 (HTTPS) | Block Kit notifications (`hooks.slack.com`) |
+| **Corporate SMTP Relays** | TCP 587 (STARTTLS), TCP 465 (SMTPS), or TCP 25 | Outbound alert emails to corporate exchange / cloud mail gateways |
+| **External NTP Servers** | UDP 123 | Continuous system clock synchronization |
+
+> [!NOTE]
+> All outbound HTTP webhook calls are strictly validated by the LNMP SSRF defense engine, rejecting destination IP addresses resolving to loopback (`127.0.0.0/8`, `::1`) or link-local cloud metadata (`169.254.169.254`).
+
+---
+
+## 8. Database Migration 0007 Execution Procedure
+
+If executing migrations manually outside of `upgrade.sh`:
+
+```bash
+cd /opt/netmon/noop/backend
+
+# Activate python virtual environment and set path
+source /opt/netmon/venv/bin/activate
+export PYTHONPATH=/opt/netmon/noop:/opt/netmon/noop/backend
+
+# Inspect pending migrations
+alembic current
+alembic heads
+
+# Apply migration 0007 (creates alert_channels and alert_delivery_logs)
+alembic upgrade head
+
+# Verify table creation in PostgreSQL
+sudo -u postgres psql -d netmon -c "\dt alert*"
 ```

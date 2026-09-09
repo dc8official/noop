@@ -291,6 +291,7 @@ async def test_alert_channel(
 
 
 @router.get("/history", response_model=APIResponse)
+@router.get("/logs", response_model=APIResponse, include_in_schema=False)
 async def get_alert_history(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),

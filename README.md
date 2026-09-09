@@ -1,6 +1,6 @@
-# LNMP: Network Monitoring Platform v3.0.0
+# LNMP: Network Monitoring Platform v3.1.0
 
-A high-precision, decoupled network telemetry and monitoring solution designed for continuous endpoint status verification, low-latency multi-protocol polling, adaptive statistical alerting, automated root-cause analysis (RCA), real-time Server-Sent Events (SSE), dual-driver storage acceleration, and dynamic topology visualization with crossing-free layout routing.
+A high-precision, decoupled network telemetry and monitoring solution designed for continuous endpoint status verification, low-latency multi-protocol polling, adaptive statistical alerting, automated root-cause analysis (RCA), real-time Server-Sent Events (SSE), dual-driver storage acceleration, enterprise multi-channel notifications, and dynamic topology visualization with crossing-free layout routing.
 
 ---
 
@@ -8,6 +8,8 @@ A high-precision, decoupled network telemetry and monitoring solution designed f
 
 The platform is decoupled into independent, modular layers to guarantee continuous telemetry collection regardless of client-side dashboard activity, heavy API load, or temporary network disruptions:
 
+* **Enterprise Alerting & Notifications Engine:** Asynchronous, non-blocking notification dispatcher pushing state transitions and RCA incidents across Microsoft Teams (Adaptive Cards v1.4 & HTML fallback), Discord (Rich Embeds), Slack (Block Kit), Generic Webhooks, and direct hardened SMTP Email with socket-level SSRF defense, AES-256-GCM encryption at rest, flapping cooldown, and cascade suppression.
+* **Interactive CSV Column Customizer:** Dynamic telemetry export allowing operators to customize exported metrics while strictly enforcing locked, non-negotiable device identity columns (`Hostname`, `IP_Address`).
 * **SQLAlchemy 2.0 ORM & Repository Pattern:** Clean data access layer separating business logic from database operations, eliminating raw SQL queries and implementing SQL-level pagination (`limit`, `offset`) across all entities.
 * **5-Ping @ 8.0s Concurrency Sweeper:** Polling engine tuned with a spacious **28-second headroom window** before the minute boundary and 0–2000ms randomized startup jitter, completely eliminating connection contention and thundering herds.
 * **Dynamic In-Memory Endpoint Registry:** Concurrent-safe registry supporting zero-downtime, sub-minute dynamic additions, updates, and deletions of monitored targets without service restarts.
@@ -92,9 +94,9 @@ cd lnmp/deploy
 ./install.sh
 ```
 
-### 2. Upgrading to v3.0.0 (Zero Historical Data Loss)
+### 2. Upgrading to v3.1.0 (Zero Historical Data Loss)
 
-To upgrade an existing installation to Version 3.0.0:
+To upgrade an existing installation to Version 3.1.0:
 
 ```bash
 cd ~/lnmp
@@ -106,11 +108,11 @@ sudo ./deploy/upgrade.sh
 
 The upgrade utility automatically executes:
 1. **Pre-Upgrade Backup**: Dumps a timestamped PostgreSQL SQL backup to `/var/backups/netmon/`.
-2. **System Dependencies**: Installs and starts `redis-server` and sets `CAP_NET_RAW` capabilities on `traceroute`.
-3. **Smart Config Migration**: Updates `/etc/netmon/config.toml` defaults (5 pings @ 8s, 120m timeout, Redis section) without overwriting secrets.
+2. **System Dependencies**: Installs and starts `redis-server`, verifies `httpx`, and sets `CAP_NET_RAW` capabilities on `traceroute`.
+3. **Smart Config Migration**: Updates `/etc/netmon/config.toml` defaults (5 pings @ 8s, 120m timeout, Redis and Alerting sections) without overwriting secrets.
 4. **Service Pause**: Gracefully pauses background daemons.
-5. **Code & Dependency Sync**: Pulls latest updates, installs Python requirements, and compiles Vue 3 assets.
-6. **Alembic Forward Migrations**: Runs `alembic upgrade head` while preserving all TimescaleDB hypertables and continuous aggregates.
+5. **Code & Dependency Sync**: Pulls latest updates, installs Python requirements (`httpx>=0.27.0`), and compiles Vue 3 assets.
+6. **Alembic Forward Migrations**: Runs `alembic upgrade head` applying migration `0007_v3_1_alert_channels_and_delivery.py` to create `alert_channels` and `alert_delivery_logs` while preserving all TimescaleDB hypertables and continuous aggregates.
 7. **Systemd Unit Refresh & Restart**: Reloads daemons, enables auto-start, and restarts `redis-server`, `netmon-api`, `netmon-engine`, and `nginx`.
 8. **Health Check**: Validates live API status and version endpoint (`/api/v1/version`).
 
