@@ -46,16 +46,28 @@ class AlertDispatcher:
         self._tasks: List[asyncio.Task] = []
         self._queue: asyncio.Queue[Tuple[str, Dict[str, Any]]] = asyncio.Queue(maxsize=1000)
 
+        self._election_task: Optional[asyncio.Task] = None
+        self._stop_event: asyncio.Event = asyncio.Event()
+        self._dispatch_semaphore: asyncio.Semaphore = asyncio.Semaphore(10)
+        self._dispatch_tasks: set[asyncio.Task] = set()
+
         # Rate limiting and flapping memory caches
         # key: (channel_id_str, endpoint_id_str, severity) -> last_sent_at
         self._rate_limits: Dict[Tuple[str, str, str], datetime] = {}
         # key: endpoint_id_str -> list of transition timestamps
         self._flapping_tracker: Dict[str, List[datetime]] = {}
 
+        # RCA suppression tracking
+        # key: endpoint_id_str -> {"incident_id": str, "parent_id": str, "expires_at": datetime}
+        self._suppressed_children: Dict[str, Dict[str, Any]] = {}
+        # key: incident_id_str -> {"root_id": str, "symptoms": list, "expires_at": datetime}
+        self._active_rca_incidents: Dict[str, Dict[str, Any]] = {}
+
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
+        self._stop_event.clear()
 
         # Start queue consumer worker
         self._tasks.append(asyncio.create_task(self._process_queue(), name="alert_dispatcher_queue"))
@@ -72,30 +84,86 @@ class AlertDispatcher:
                         await self._lock_conn.close()
                         self._lock_conn = None
                     self._is_leader = False
+                    self._election_task = asyncio.create_task(self._standby_election_loop(), name="alert_dispatcher_election")
                     return
                 self._is_leader = True
             else:
                 self._is_leader = True
         except Exception as exc:
-            logger.warning("AlertDispatcher: advisory lock election failed: %s. Continuing in leader mode.", exc)
-            self._is_leader = True
+            logger.warning("AlertDispatcher: advisory lock election failed: %s. Starting standby retry loop.", exc)
+            if self._lock_conn:
+                try:
+                    await self._lock_conn.close()
+                except Exception:
+                    pass
+                self._lock_conn = None
+            self._is_leader = False
+            self._election_task = asyncio.create_task(self._standby_election_loop(), name="alert_dispatcher_election")
+            return
 
         if self._is_leader:
             self._tasks.append(asyncio.create_task(self._listen_broker("STATE_TRANSITION"), name="alert_broker_state_trans"))
             self._tasks.append(asyncio.create_task(self._listen_broker("RCA_INCIDENT"), name="alert_broker_rca"))
             logger.info("[AlertDispatcher] Active leader election won. Broker listeners started.")
 
+    async def _standby_election_loop(self) -> None:
+        """Continuous advisory lock election retry loop for standby worker failover."""
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.sleep(2.5)
+                if self._stop_event.is_set():
+                    break
+                if async_engine.dialect.name == "postgresql":
+                    conn = await async_engine.connect()
+                    res = await conn.execute(text(f"SELECT pg_try_advisory_lock({ADVISORY_LOCK_ID})"))
+                    acquired = bool(res.scalar())
+                    if acquired:
+                        self._lock_conn = conn
+                        self._is_leader = True
+                        logger.info("[AlertDispatcher] Active leader election won during standby retry. Promoting to leader.")
+                        self._tasks.append(asyncio.create_task(self._listen_broker("STATE_TRANSITION"), name="alert_broker_state_trans"))
+                        self._tasks.append(asyncio.create_task(self._listen_broker("RCA_INCIDENT"), name="alert_broker_rca"))
+                        break
+                    else:
+                        await conn.close()
+                else:
+                    self._is_leader = True
+                    self._tasks.append(asyncio.create_task(self._listen_broker("STATE_TRANSITION"), name="alert_broker_state_trans"))
+                    self._tasks.append(asyncio.create_task(self._listen_broker("RCA_INCIDENT"), name="alert_broker_rca"))
+                    break
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("[AlertDispatcher] Standby election attempt failed: %s", exc)
+
     async def stop(self) -> None:
         self._running = False
+        self._stop_event.set()
+
+        if self._election_task:
+            self._election_task.cancel()
+            try:
+                await self._election_task
+            except asyncio.CancelledError:
+                pass
+            self._election_task = None
+
         for task in self._tasks:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
             self._tasks.clear()
 
-        if self._is_leader and self._lock_conn:
+        for task in list(self._dispatch_tasks):
+            task.cancel()
+        if self._dispatch_tasks:
+            await asyncio.gather(*self._dispatch_tasks, return_exceptions=True)
+            self._dispatch_tasks.clear()
+
+        if self._lock_conn:
             try:
-                await self._lock_conn.execute(text(f"SELECT pg_advisory_unlock({ADVISORY_LOCK_ID})"))
+                if self._is_leader:
+                    await self._lock_conn.execute(text(f"SELECT pg_advisory_unlock({ADVISORY_LOCK_ID})"))
             except Exception as exc:
                 logger.warning("AlertDispatcher: failed to release advisory lock: %s", exc)
             finally:
@@ -134,9 +202,11 @@ class AlertDispatcher:
 
     def _prune_memory_caches(self, now: datetime) -> None:
         """
-        Evicts stale rate-limit and flapping tracker entries to eliminate memory leaks:
+        Evicts stale rate-limit, flapping tracker, and RCA suppression entries to eliminate memory leaks:
         - Rate limits where last_sent < now - 1 hour.
         - Flapping tracker keys where all timestamps < now - 10 minutes or list is empty.
+        - Suppressed children where expires_at < now.
+        - Active RCA incidents where expires_at < now.
         """
         rl_cutoff = now - timedelta(hours=1)
         expired_rl = [k for k, last_sent in self._rate_limits.items() if last_sent < rl_cutoff]
@@ -155,16 +225,38 @@ class AlertDispatcher:
         for ep_key in expired_flaps:
             del self._flapping_tracker[ep_key]
 
+        # Evict expired RCA suppression entries
+        expired_children = [
+            cid for cid, info in list(self._suppressed_children.items())
+            if info.get("expires_at") and info["expires_at"] < now
+        ]
+        for cid in expired_children:
+            del self._suppressed_children[cid]
+
+        expired_rcas = [
+            inc_id for inc_id, info in list(self._active_rca_incidents.items())
+            if info.get("expires_at") and info["expires_at"] < now
+        ]
+        for inc_id in expired_rcas:
+            del self._active_rca_incidents[inc_id]
+
+    async def _worker_dispatch(self, event_type: str, data: Dict[str, Any]) -> None:
+        async with self._dispatch_semaphore:
+            try:
+                await self._dispatch_event(event_type, data)
+            except Exception as exc:
+                logger.error("AlertDispatcher dispatch error: %s", exc, exc_info=True)
+
     async def _process_queue(self) -> None:
         while self._running:
             try:
                 event_type, data = await self._queue.get()
                 now = datetime.now(timezone.utc)
                 self._prune_memory_caches(now)
-                try:
-                    await self._dispatch_event(event_type, data)
-                finally:
-                    self._queue.task_done()
+                task = asyncio.create_task(self._worker_dispatch(event_type, data))
+                self._dispatch_tasks.add(task)
+                task.add_done_callback(self._dispatch_tasks.discard)
+                self._queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -184,7 +276,52 @@ class AlertDispatcher:
             logger.warning("AlertDispatcher: failed to read master toggle: %s. Defaulting to enabled.", err)
             return True
 
+    def _is_child_suppressed(self, endpoint_id: Optional[str], now: datetime) -> bool:
+        if not endpoint_id:
+            return False
+        ep_str = str(endpoint_id)
+        if ep_str not in self._suppressed_children:
+            return False
+        info = self._suppressed_children[ep_str]
+        if info.get("expires_at") and now > info["expires_at"]:
+            del self._suppressed_children[ep_str]
+            return False
+        return True
+
     async def _dispatch_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        now = datetime.now(timezone.utc)
+
+        # Handle RCA_INCIDENT event
+        if event_type == "RCA_INCIDENT":
+            inc_id = str(data.get("incident_id") or "")
+            root_id = str(data.get("root_cause_endpoint_id") or "")
+            symptom_ids = data.get("symptom_endpoint_ids") or []
+            is_resolved = data.get("is_resolved", False)
+            if is_resolved:
+                if inc_id in self._active_rca_incidents:
+                    del self._active_rca_incidents[inc_id]
+                to_delete = [
+                    cid for cid, info in self._suppressed_children.items()
+                    if info.get("incident_id") == inc_id or info.get("parent_id") == root_id
+                ]
+                for cid in to_delete:
+                    self._suppressed_children.pop(cid, None)
+            else:
+                ttl_expires = now + timedelta(minutes=30)
+                if inc_id:
+                    self._active_rca_incidents[inc_id] = {
+                        "root_id": root_id,
+                        "symptoms": [str(s) for s in symptom_ids],
+                        "expires_at": ttl_expires,
+                    }
+                for s_id in symptom_ids:
+                    self._suppressed_children[str(s_id)] = {
+                        "incident_id": inc_id,
+                        "parent_id": root_id,
+                        "expires_at": ttl_expires,
+                    }
+            return
+
         # 1. Master Toggle Check
         if not await self._is_alerting_enabled():
             logger.debug("AlertDispatcher: Master alerting is DISABLED. Dropping event.")
@@ -200,39 +337,78 @@ class AlertDispatcher:
             or "UNKNOWN"
         ).upper()
 
+        # If parent recovered, clear its RCA suppressions
+        if new_state in ("UP", "RECOVERED") and endpoint_id:
+            ep_str = str(endpoint_id)
+            to_clear_inc = [inc_id for inc_id, info in self._active_rca_incidents.items() if info.get("root_id") == ep_str]
+            for inc_id in to_clear_inc:
+                del self._active_rca_incidents[inc_id]
+            to_clear_children = [cid for cid, info in self._suppressed_children.items() if info.get("parent_id") == ep_str]
+            for cid in to_clear_children:
+                del self._suppressed_children[cid]
+
         # Upstream Root-Cause Incident Suppression
-        # If an RCA grouping marks this as downstream symptom, suppress alert
-        if data.get("is_symptom") is True or data.get("suppressed_by_upstream") is True:
+        # If an RCA grouping marks this as downstream symptom or child node is suppressed by active RCA:
+        if (
+            data.get("is_symptom") is True
+            or data.get("suppressed_by_upstream") is True
+            or self._is_child_suppressed(endpoint_id, now)
+        ):
             logger.info("AlertDispatcher: Suppressing alert for %s due to upstream root cause failure.", endpoint_name)
+            # Record THROTTLED delivery log for active channels
+            try:
+                async with AsyncSessionLocal() as db:
+                    stmt = select(AlertChannel).where(AlertChannel.is_enabled == True)
+                    res = await db.execute(stmt)
+                    channels = res.scalars().all()
+                    for channel in channels:
+                        await self._record_delivery_log(
+                            db=db,
+                            channel_id=channel.id,
+                            channel_name=channel.name,
+                            endpoint_id=UUID(str(endpoint_id)) if endpoint_id else None,
+                            endpoint_name=endpoint_name,
+                            event_type=event_type,
+                            status="THROTTLED",
+                            status_code=None,
+                            response_message="Suppressed by upstream root cause",
+                        )
+            except Exception as exc:
+                logger.warning("AlertDispatcher: Error recording RCA suppression logs: %s", exc)
             return
 
         # Check Flapping
-        now = datetime.now(timezone.utc)
         ep_key = str(endpoint_id) if endpoint_id else endpoint_name
         is_flapping = self._check_flapping(ep_key, now)
 
         # Retrieve active channels from DB
-        async with AsyncSessionLocal() as db:
-            stmt = select(AlertChannel).where(AlertChannel.is_enabled == True)
-            res = await db.execute(stmt)
-            channels = res.scalars().all()
+        try:
+            async with AsyncSessionLocal() as db:
+                stmt = select(AlertChannel).where(AlertChannel.is_enabled == True)
+                res = await db.execute(stmt)
+                channels = res.scalars().all()
+        except Exception as exc:
+            logger.error("AlertDispatcher: Error loading active channels: %s", exc)
+            channels = []
 
-            for channel in channels:
-                try:
-                    await self._evaluate_and_send_channel(
-                        db=db,
-                        channel=channel,
-                        endpoint_id=endpoint_id,
-                        endpoint_name=endpoint_name,
-                        ip_address=ip_address,
-                        event_type=event_type,
-                        severity=new_state,
-                        timestamp=now,
-                        details=data,
-                        is_flapping=is_flapping,
-                    )
-                except Exception as exc:
-                    logger.error("AlertDispatcher: Error dispatching to channel '%s': %s", channel.name, exc)
+        # Concurrent Channel Dispatch
+        tasks = [
+            self._evaluate_and_send_channel(
+                db=None,
+                channel=channel,
+                endpoint_id=endpoint_id,
+                endpoint_name=endpoint_name,
+                ip_address=ip_address,
+                event_type=event_type,
+                severity=new_state,
+                timestamp=now,
+                details=data,
+                is_flapping=is_flapping,
+            )
+            for channel in channels
+        ]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _check_flapping(self, endpoint_key: str, now: datetime) -> bool:
         """Sliding window tracking for endpoint flapping."""
@@ -320,9 +496,6 @@ class AlertDispatcher:
             )
             return
 
-        # Mark rate limit
-        self._rate_limits[rl_key] = timestamp
-
         # Decrypt channel config
         config = self._parse_channel_config(channel.config)
 
@@ -338,6 +511,9 @@ class AlertDispatcher:
                 timestamp=timestamp,
                 details=details,
             )
+            if status in ("DELIVERED", "THROTTLED"):
+                self._rate_limits[rl_key] = timestamp
+
             await self._record_delivery_log(
                 db=db,
                 channel_id=channel.id,
@@ -507,6 +683,10 @@ class AlertDispatcher:
                 server.quit()
             except Exception:
                 pass
+            try:
+                server.close()
+            except Exception:
+                pass
 
     async def _record_delivery_log(
         self,
@@ -531,8 +711,13 @@ class AlertDispatcher:
                 status_code=status_code,
                 response_message=response_message[:1000] if response_message else None,
             )
-            db.add(log_entry)
-            await db.commit()
+            if db is not None:
+                db.add(log_entry)
+                await db.commit()
+            else:
+                async with AsyncSessionLocal() as session:
+                    session.add(log_entry)
+                    await session.commit()
         except Exception as exc:
             logger.error("AlertDispatcher: Failed to write delivery log: %s", exc)
 

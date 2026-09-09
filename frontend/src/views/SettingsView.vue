@@ -30,8 +30,9 @@
         type="button" 
         class="tab-btn" 
         :class="{ active: activeTab === 'alerts' }" 
-        @click="activeTab = 'alerts'"
+        @click="switchTab('alerts')"
         role="tab"
+        :aria-selected="activeTab === 'alerts'"
       >
         <span class="tab-icon">🔔</span>
         <span class="tab-label">Alert Channels</span>
@@ -42,8 +43,9 @@
         type="button" 
         class="tab-btn" 
         :class="{ active: activeTab === 'performance' }" 
-        @click="activeTab = 'performance'"
+        @click="switchTab('performance')"
         role="tab"
+        :aria-selected="activeTab === 'performance'"
       >
         <span class="tab-icon">⚡</span>
         <span class="tab-label">Performance & Storage</span>
@@ -53,8 +55,9 @@
         type="button" 
         class="tab-btn" 
         :class="{ active: activeTab === 'security' }" 
-        @click="activeTab = 'security'"
+        @click="switchTab('security')"
         role="tab"
+        :aria-selected="activeTab === 'security'"
       >
         <span class="tab-icon">🛡️</span>
         <span class="tab-label">Security & Discovery</span>
@@ -64,8 +67,9 @@
         type="button" 
         class="tab-btn" 
         :class="{ active: activeTab === 'users' }" 
-        @click="activeTab = 'users'"
+        @click="switchTab('users')"
         role="tab"
+        :aria-selected="activeTab === 'users'"
       >
         <span class="tab-icon">👥</span>
         <span class="tab-label">User Governance</span>
@@ -422,27 +426,44 @@
     </div>
 
     <!-- 800px Channel Configuration Modal -->
-    <div class="modal-overlay" v-if="showChannelModal" @click.self="showChannelModal = false">
-      <div class="modal-card channel-modal-dialog">
+    <div 
+      class="modal-overlay" 
+      v-if="showChannelModal" 
+      @click.self="closeChannelModal"
+      @keydown="onChannelModalKeydown"
+    >
+      <div 
+        ref="channelModalRef"
+        class="modal-card channel-modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="channel-modal-title"
+        tabindex="-1"
+      >
         <div class="modal-header">
           <div>
-            <h3 class="modal-title">{{ editingChannelId ? 'Edit Alert Channel' : 'Configure New Alert Channel' }}</h3>
+            <h3 id="channel-modal-title" class="modal-title">{{ editingChannelId ? 'Edit Alert Channel' : 'Configure New Alert Channel' }}</h3>
             <p class="modal-subtitle">Configure outbound webhook or SMTP email notifications for real-time telemetry events.</p>
           </div>
-          <button class="btn-close" @click="showChannelModal = false">✕</button>
+          <button class="btn-close" @click="closeChannelModal" aria-label="Close dialog">✕</button>
         </div>
 
         <form @submit.prevent="saveChannel" class="modal-form">
           <!-- Provider Selection Cards -->
           <div class="form-group">
-            <label class="setting-label">Select Notification Provider *</label>
-            <div class="provider-selector-grid">
+            <label class="setting-label" id="provider-selection-label">Select Notification Provider *</label>
+            <div class="provider-selector-grid" role="radiogroup" aria-labelledby="provider-selection-label">
               <div 
                 v-for="p in providerOptions" 
                 :key="p.id" 
                 class="provider-card" 
                 :class="{ active: channelForm.channel_type === p.id }"
+                role="radio"
+                :aria-checked="channelForm.channel_type === p.id"
+                tabindex="0"
                 @click="channelForm.channel_type = p.id"
+                @keydown.enter.prevent="channelForm.channel_type = p.id"
+                @keydown.space.prevent="channelForm.channel_type = p.id"
               >
                 <span class="provider-icon">{{ p.icon }}</span>
                 <span class="provider-name">{{ p.name }}</span>
@@ -613,7 +634,7 @@
           </div>
 
           <div class="modal-actions">
-            <button type="button" class="btn-secondary" @click="showChannelModal = false">Cancel</button>
+            <button type="button" class="btn-secondary" @click="closeChannelModal">Cancel</button>
             <button type="submit" class="btn-primary" :disabled="channelSaving">
               {{ channelSaving ? 'Saving...' : (editingChannelId ? 'Update Channel' : 'Create Channel') }}
             </button>
@@ -623,11 +644,23 @@
     </div>
 
     <!-- Add User Modal -->
-    <div class="modal-overlay" v-if="showAddModal" @click.self="showAddModal = false">
-      <div class="modal-card">
+    <div 
+      class="modal-overlay" 
+      v-if="showAddModal" 
+      @click.self="closeAddModal"
+      @keydown="onAddModalKeydown"
+    >
+      <div 
+        ref="addModalRef"
+        class="modal-card" 
+        role="dialog" 
+        aria-modal="true" 
+        aria-labelledby="add-user-modal-title"
+        tabindex="-1"
+      >
         <div class="modal-header">
-          <h3>Register New Operator Account</h3>
-          <button class="btn-close" @click="showAddModal = false">✕</button>
+          <h3 id="add-user-modal-title">Register New Operator Account</h3>
+          <button class="btn-close" @click="closeAddModal" aria-label="Close dialog">✕</button>
         </div>
         <form @submit.prevent="saveNewUser" class="modal-form">
           <div class="form-group">
@@ -646,7 +679,7 @@
             </select>
           </div>
           <div class="modal-actions">
-            <button type="button" class="btn-secondary" @click="showAddModal = false">Cancel</button>
+            <button type="button" class="btn-secondary" @click="closeAddModal">Cancel</button>
             <button type="submit" class="btn-primary" :disabled="userSaving">
               {{ userSaving ? 'Creating...' : 'Register User' }}
             </button>
@@ -656,11 +689,23 @@
     </div>
 
     <!-- Reset Password Modal -->
-    <div class="modal-overlay" v-if="showResetModal" @click.self="showResetModal = false">
-      <div class="modal-card">
+    <div 
+      class="modal-overlay" 
+      v-if="showResetModal" 
+      @click.self="closeResetModal"
+      @keydown="onResetModalKeydown"
+    >
+      <div 
+        ref="resetModalRef"
+        class="modal-card" 
+        role="dialog" 
+        aria-modal="true" 
+        aria-labelledby="reset-modal-title"
+        tabindex="-1"
+      >
         <div class="modal-header">
-          <h3>Reset Password for {{ targetUser?.username }}</h3>
-          <button class="btn-close" @click="showResetModal = false">✕</button>
+          <h3 id="reset-modal-title">Reset Password for {{ targetUser?.username }}</h3>
+          <button class="btn-close" @click="closeResetModal" aria-label="Close dialog">✕</button>
         </div>
         <form @submit.prevent="executeResetPassword" class="modal-form">
           <div class="form-group">
@@ -668,7 +713,7 @@
             <input v-model="resetPasswordVal" type="password" placeholder="Leave blank to auto-generate" class="form-input" />
           </div>
           <div class="modal-actions">
-            <button type="button" class="btn-secondary" @click="showResetModal = false">Cancel</button>
+            <button type="button" class="btn-secondary" @click="closeResetModal">Cancel</button>
             <button type="submit" class="btn-primary" :disabled="userSaving">
               {{ userSaving ? 'Resetting...' : 'Confirm Reset' }}
             </button>
@@ -680,7 +725,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useToast } from 'primevue/usetoast'
+import { useConfirm } from 'primevue/useconfirm'
 import {
   getUsers,
   createUser,
@@ -699,7 +747,89 @@ import {
 } from '../services/api.js'
 import { currentUser, loadUserFromStorage } from '../services/auth.js'
 
-const activeTab = ref('alerts')
+const route = useRoute()
+const router = useRouter()
+const toast = useToast()
+const confirm = useConfirm()
+
+const activeTab = ref(route.query.tab?.toString() || 'alerts')
+
+function switchTab(tab) {
+  activeTab.value = tab
+  router.replace({ query: { ...route.query, tab } })
+}
+
+const channelModalRef = ref(null)
+let channelOpenerElement = null
+
+const addModalRef = ref(null)
+let addOpenerElement = null
+
+const resetModalRef = ref(null)
+let resetOpenerElement = null
+
+function trapFocusInModal(e, modalEl) {
+  if (e.key !== 'Tab' || !modalEl) return
+  const focusables = modalEl.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )
+  if (!focusables.length) return
+  const first = focusables[0]
+  const last = focusables[focusables.length - 1]
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
+
+function onChannelModalKeydown(e) {
+  if (e.key === 'Escape') {
+    closeChannelModal()
+    return
+  }
+  trapFocusInModal(e, channelModalRef.value)
+}
+
+function closeChannelModal() {
+  showChannelModal.value = false
+  nextTick(() => {
+    channelOpenerElement?.focus()
+  })
+}
+
+function onAddModalKeydown(e) {
+  if (e.key === 'Escape') {
+    closeAddModal()
+    return
+  }
+  trapFocusInModal(e, addModalRef.value)
+}
+
+function closeAddModal() {
+  showAddModal.value = false
+  nextTick(() => {
+    addOpenerElement?.focus()
+  })
+}
+
+function onResetModalKeydown(e) {
+  if (e.key === 'Escape') {
+    closeResetModal()
+    return
+  }
+  trapFocusInModal(e, resetModalRef.value)
+}
+
+function closeResetModal() {
+  showResetModal.value = false
+  nextTick(() => {
+    resetOpenerElement?.focus()
+  })
+}
+
 const saving = ref(false)
 const alertMessage = ref(null)
 const alertType = ref('alert-success')
@@ -893,6 +1023,7 @@ async function saveAllSettings() {
 }
 
 function openAddChannelModal() {
+  channelOpenerElement = document.activeElement
   editingChannelId.value = null
   channelForm.name = ''
   channelForm.channel_type = 'TEAMS'
@@ -912,9 +1043,13 @@ function openAddChannelModal() {
   channelScope.value = 'all'
   modalTestResult.value = null
   showChannelModal.value = true
+  nextTick(() => {
+    channelModalRef.value?.querySelector('button, input, [tabindex="0"]')?.focus()
+  })
 }
 
 function openEditChannelModal(ch) {
+  channelOpenerElement = document.activeElement
   editingChannelId.value = ch.id
   channelForm.name = ch.name
   channelForm.channel_type = ch.channel_type
@@ -938,6 +1073,9 @@ function openEditChannelModal(ch) {
 
   modalTestResult.value = null
   showChannelModal.value = true
+  nextTick(() => {
+    channelModalRef.value?.querySelector('button, input, [tabindex="0"]')?.focus()
+  })
 }
 
 async function saveChannel() {
@@ -956,7 +1094,12 @@ async function saveChannel() {
       try {
         payload.config.headers = JSON.parse(channelForm.headersRaw)
       } catch (e) {
-        alert('Invalid JSON in custom headers.')
+        toast.add({
+          severity: 'error',
+          summary: 'Validation Error',
+          detail: 'Invalid JSON in custom headers.',
+          life: 4000,
+        })
         channelSaving.value = false
         return
       }
@@ -972,32 +1115,72 @@ async function saveChannel() {
     if (editingChannelId.value) {
       await updateAlertChannel(editingChannelId.value, payload)
       alertMessage.value = `Alert channel '${channelForm.name}' updated.`
+      toast.add({
+        severity: 'success',
+        summary: 'Channel Updated',
+        detail: `Alert channel '${channelForm.name}' updated.`,
+        life: 3000,
+      })
     } else {
       await createAlertChannel(payload)
       alertMessage.value = `Alert channel '${channelForm.name}' created.`
+      toast.add({
+        severity: 'success',
+        summary: 'Channel Created',
+        detail: `Alert channel '${channelForm.name}' created.`,
+        life: 3000,
+      })
     }
     alertType.value = 'alert-success'
-    showChannelModal.value = false
+    closeChannelModal()
     await fetchChannels()
   } catch (err) {
     alertMessage.value = err.response?.data?.detail || 'Failed to save alert channel.'
     alertType.value = 'alert-error'
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: err.response?.data?.detail || 'Failed to save alert channel.',
+      life: 4000,
+    })
   } finally {
     channelSaving.value = false
   }
 }
 
 async function confirmDeleteChannel(ch) {
-  if (!confirm(`Delete alert channel '${ch.name}'? Associated delivery history will also be removed.`)) return
-  try {
-    await deleteAlertChannel(ch.id)
-    alertMessage.value = `Channel '${ch.name}' deleted.`
-    alertType.value = 'alert-success'
-    await fetchChannels()
-  } catch (err) {
-    alertMessage.value = err.response?.data?.detail || 'Failed to delete channel.'
-    alertType.value = 'alert-error'
-  }
+  confirm.require({
+    message: `Delete alert channel '${ch.name}'? Associated delivery history will also be removed.`,
+    header: 'Confirm Channel Deletion',
+    icon: 'pi pi-exclamation-triangle',
+    rejectClass: 'p-button-secondary p-button-outlined',
+    rejectLabel: 'Cancel',
+    acceptLabel: 'Delete',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      try {
+        await deleteAlertChannel(ch.id)
+        alertMessage.value = `Channel '${ch.name}' deleted.`
+        alertType.value = 'alert-success'
+        await fetchChannels()
+        toast.add({
+          severity: 'success',
+          summary: 'Channel Deleted',
+          detail: `Channel '${ch.name}' deleted successfully.`,
+          life: 3000,
+        })
+      } catch (err) {
+        alertMessage.value = err.response?.data?.detail || 'Failed to delete channel.'
+        alertType.value = 'alert-error'
+        toast.add({
+          severity: 'error',
+          summary: 'Error',
+          detail: err.response?.data?.detail || 'Failed to delete channel.',
+          life: 4000,
+        })
+      }
+    }
+  })
 }
 
 async function triggerChannelTest(ch) {
@@ -1070,32 +1253,52 @@ async function sendModalDiagnosticTest() {
 }
 
 function openAddUserModal() {
+  addOpenerElement = document.activeElement
   userForm.username = ''
   userForm.password = ''
   userForm.role = 'VIEWER'
   showAddModal.value = true
+  nextTick(() => {
+    addModalRef.value?.querySelector('input')?.focus()
+  })
 }
 
 async function saveNewUser() {
   userSaving.value = true
   try {
     await createUser(userForm)
-    showAddModal.value = false
+    closeAddModal()
     alertMessage.value = `User account '${userForm.username}' created successfully.`
     alertType.value = 'alert-success'
+    toast.add({
+      severity: 'success',
+      summary: 'User Created',
+      detail: `User account '${userForm.username}' created successfully.`,
+      life: 3000,
+    })
     await fetchUsersList()
   } catch (err) {
     alertMessage.value = err.response?.data?.detail || 'Failed to create user.'
     alertType.value = 'alert-error'
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: err.response?.data?.detail || 'Failed to create user.',
+      life: 4000,
+    })
   } finally {
     userSaving.value = false
   }
 }
 
 function openResetPasswordModal(user) {
+  resetOpenerElement = document.activeElement
   targetUser.value = user
   resetPasswordVal.value = ''
   showResetModal.value = true
+  nextTick(() => {
+    resetModalRef.value?.querySelector('input')?.focus()
+  })
 }
 
 async function executeResetPassword() {
@@ -1104,13 +1307,25 @@ async function executeResetPassword() {
   try {
     const payload = resetPasswordVal.value ? { password: resetPasswordVal.value } : {}
     await resetUserPassword(targetUser.value.id, payload)
-    showResetModal.value = false
+    closeResetModal()
     alertMessage.value = `Password for '${targetUser.value.username}' reset successfully.`
     alertType.value = 'alert-success'
+    toast.add({
+      severity: 'success',
+      summary: 'Password Reset',
+      detail: `Password for '${targetUser.value.username}' reset successfully.`,
+      life: 3000,
+    })
     await fetchUsersList()
   } catch (err) {
     alertMessage.value = err.response?.data?.detail || 'Failed to reset password.'
     alertType.value = 'alert-error'
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: err.response?.data?.detail || 'Failed to reset password.',
+      life: 4000,
+    })
   } finally {
     userSaving.value = false
   }
@@ -1130,16 +1345,38 @@ async function toggleUserStatus(user) {
 }
 
 async function confirmDeleteUser(user) {
-  if (!confirm(`Permanently revoke and delete user account '${user.username}'?`)) return
-  try {
-    await deleteUser(user.id)
-    alertMessage.value = `User '${user.username}' has been removed.`
-    alertType.value = 'alert-success'
-    await fetchUsersList()
-  } catch (err) {
-    alertMessage.value = err.response?.data?.detail || 'Failed to delete user.'
-    alertType.value = 'alert-error'
-  }
+  confirm.require({
+    message: `Permanently revoke and delete user account '${user.username}'?`,
+    header: 'Confirm User Revocation',
+    icon: 'pi pi-exclamation-triangle',
+    rejectClass: 'p-button-secondary p-button-outlined',
+    rejectLabel: 'Cancel',
+    acceptLabel: 'Delete',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      try {
+        await deleteUser(user.id)
+        alertMessage.value = `User '${user.username}' has been removed.`
+        alertType.value = 'alert-success'
+        await fetchUsersList()
+        toast.add({
+          severity: 'success',
+          summary: 'User Removed',
+          detail: `User '${user.username}' has been removed.`,
+          life: 3000,
+        })
+      } catch (err) {
+        alertMessage.value = err.response?.data?.detail || 'Failed to delete user.'
+        alertType.value = 'alert-error'
+        toast.add({
+          severity: 'error',
+          summary: 'Error',
+          detail: err.response?.data?.detail || 'Failed to delete user.',
+          life: 4000,
+        })
+      }
+    }
+  })
 }
 
 onMounted(() => {
@@ -1314,13 +1551,13 @@ onMounted(() => {
 }
 
 .badge-redis { background: rgba(239, 68, 68, 0.15); color: #EF4444; border: 1px solid rgba(239, 68, 68, 0.3); }
-.badge-pg { background: rgba(59, 130, 246, 0.15); color: #60A5FA; border: 1px solid rgba(59, 130, 246, 0.3); }
+.badge-pg { background: rgba(59, 130, 246, 0.15); color: #1d4ed8; border: 1px solid rgba(29, 78, 216, 0.3); font-size: 11px; font-weight: 600; }
 
 /* Provider pills */
 .provider-pill {
   display: inline-block;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   padding: 2px 8px;
   border-radius: 4px;
   background: var(--bg-surface-selected);
@@ -1328,8 +1565,8 @@ onMounted(() => {
 }
 .provider-pill.teams { color: #6264A7; border-color: rgba(98, 100, 167, 0.3); }
 .provider-pill.discord { color: #5865F2; border-color: rgba(88, 101, 242, 0.3); }
-.provider-pill.slack { color: #ECB22E; border-color: rgba(236, 178, 46, 0.3); }
-.provider-pill.email_smtp { color: #10B981; border-color: rgba(16, 185, 129, 0.3); }
+.provider-pill.slack { color: #996b00; border-color: #996b00; }
+.provider-pill.email_smtp { color: #047857; border-color: #047857; }
 .provider-pill.generic_webhook { color: #3B82F6; border-color: rgba(59, 130, 246, 0.3); }
 
 /* Scope badge */
@@ -1535,7 +1772,7 @@ input:checked + .slider:before { transform: translateX(20px); }
 
 .provider-icon { font-size: 20px; }
 .provider-name { font-size: 11px; font-weight: 700; color: var(--text-primary); }
-.provider-badge { font-size: 9px; color: var(--text-muted); }
+.provider-badge { font-size: 11px; font-weight: 600; color: var(--text-muted); }
 
 /* Target picker in modal */
 .target-picker-box {

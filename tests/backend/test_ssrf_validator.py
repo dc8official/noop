@@ -42,3 +42,12 @@ def test_ssrf_allows_private_when_flag_enabled():
     # Should not raise exception
     validate_outbound_url("http://192.168.1.100/webhook", allow_private=True)
     validate_outbound_url("http://10.10.10.10:8080/hook", allow_private=True)
+
+
+def test_ssrf_blocks_cgnat_rfc6598():
+    with pytest.raises(ValueError, match="private network"):
+        validate_outbound_url("http://100.64.0.1/test", allow_private=False)
+
+    with pytest.raises(ValueError, match="private network"):
+        validate_outbound_url("http://100.127.255.254/api", allow_private=False)
+

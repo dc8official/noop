@@ -95,7 +95,20 @@ def upgrade() -> None:
         ),
     )
 
+    op.create_index(
+        "idx_alert_channels_is_enabled",
+        "alert_channels",
+        ["is_enabled"],
+    )
+    op.create_index(
+        "idx_endpoint_events_start_time_id",
+        "endpoint_events",
+        ["start_time", "id"],
+    )
+
 
 def downgrade() -> None:
+    op.drop_index("idx_endpoint_events_start_time_id", table_name="endpoint_events")
+    op.drop_index("idx_alert_channels_is_enabled", table_name="alert_channels")
     op.drop_table("alert_delivery_logs")
     op.drop_table("alert_channels")

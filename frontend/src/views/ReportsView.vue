@@ -212,14 +212,21 @@
     </div>
 
     <!-- Interactive CSV Export Customizer Modal -->
-    <div v-if="showExportModal" class="modal-backdrop" @click.self="showExportModal = false">
-      <div class="modal-dialog">
+    <div v-if="showExportModal" class="modal-backdrop" @click.self="closeExportModal" @keydown="onExportModalKeydown">
+      <div 
+        ref="exportModalRef" 
+        class="modal-dialog" 
+        role="dialog" 
+        aria-modal="true" 
+        aria-labelledby="export-modal-title"
+        tabindex="-1"
+      >
         <div class="modal-header">
           <div class="modal-title-group">
-            <h2 class="modal-title">📊 Configure Telemetry CSV Export</h2>
+            <h2 id="export-modal-title" class="modal-title">📊 Configure Telemetry CSV Export</h2>
             <p class="modal-subtitle">Select endpoint scope, time window, and data columns for telemetry export</p>
           </div>
-          <button class="btn-close" @click="showExportModal = false" aria-label="Close modal">✕</button>
+          <button class="btn-close" @click="closeExportModal" aria-label="Close modal">✕</button>
         </div>
 
         <div class="modal-body">
@@ -299,11 +306,19 @@
                 @click="toggleColumn(col)"
               >
                 <div class="column-item-check">
-                  <span v-if="col.locked" class="locked-icon" title="Required Enterprise Traceability Field">🔒</span>
+                  <input 
+                    v-if="col.locked" 
+                    type="checkbox" 
+                    checked 
+                    disabled 
+                    aria-disabled="true"
+                    :aria-label="`${col.label} (Required locked field)`"
+                  />
                   <input 
                     v-else 
                     type="checkbox" 
                     :checked="isColumnSelected(col.id)" 
+                    :aria-label="col.label"
                     @click.stop="toggleColumn(col)"
                   />
                 </div>
@@ -315,7 +330,7 @@
         </div>
 
         <div class="modal-footer">
-          <button class="btn-secondary" @click="showExportModal = false" :disabled="exporting">
+          <button class="btn-secondary" @click="closeExportModal" :disabled="exporting">
             Cancel
           </button>
           <button class="btn-primary" @click="triggerExport" :disabled="exporting || (exportScope === 'selected' && exportSelectedIds.length === 0)">
@@ -329,8 +344,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
+import { useToast } from 'primevue/usetoast'
 import { getFleetSummary, exportBatchTelemetry } from '../services/api.js'
+
+const toast = useToast()
+const exportModalRef = ref(null)
+let exportOpenerElement = null
 
 const loading = ref(false)
 const exporting = ref(false)
@@ -545,10 +565,45 @@ function toggleSelectAllExport() {
 }
 
 function openExportModal() {
+  exportOpenerElement = document.activeElement
   exportScope.value = 'all'
   exportRange.value = filterRange.value
   exportSelectedIds.value = endpoints.value.map(e => e.id)
   showExportModal.value = true
+  nextTick(() => {
+    if (exportModalRef.value) {
+      const first = exportModalRef.value.querySelector('button, input')
+      first?.focus()
+    }
+  })
+}
+
+function closeExportModal() {
+  showExportModal.value = false
+  nextTick(() => {
+    exportOpenerElement?.focus()
+  })
+}
+
+function onExportModalKeydown(e) {
+  if (e.key === 'Escape') {
+    closeExportModal()
+    return
+  }
+  if (e.key !== 'Tab' || !exportModalRef.value) return
+  const focusables = exportModalRef.value.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )
+  if (!focusables.length) return
+  const first = focusables[0]
+  const last = focusables[focusables.length - 1]
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
 }
 
 async function triggerExport() {
@@ -585,10 +640,21 @@ async function triggerExport() {
     link.click()
     document.body.removeChild(link)
     window.URL.revokeObjectURL(url)
-    showExportModal.value = false
+    closeExportModal()
+    toast.add({
+      severity: 'success',
+      summary: 'Export Complete',
+      detail: 'Telemetry CSV downloaded successfully.',
+      life: 3000,
+    })
   } catch (err) {
     console.error('CSV export failed:', err)
-    alert('Failed to generate batch CSV export.')
+    toast.add({
+      severity: 'error',
+      summary: 'Export Failed',
+      detail: 'Failed to generate batch CSV export.',
+      life: 4000,
+    })
   } finally {
     exporting.value = false
   }

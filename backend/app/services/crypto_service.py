@@ -87,10 +87,14 @@ def mask_secret(secret: str) -> str:
             parsed = urlparse(secret)
             # Mask query parameters
             query_params = parse_qsl(parsed.query, keep_blank_values=True)
+            sensitive_keys = {
+                "sig", "token", "key", "secret", "webhook", "auth",
+                "api_key", "password", "access_token", "apikey", "bearer", "code",
+            }
             if query_params:
                 masked_params = []
                 for k, v in query_params:
-                    if k.lower() in ("sig", "token", "key", "secret", "webhook", "auth", "api_key", "password"):
+                    if k.lower() in sensitive_keys:
                         masked_params.append((k, "••••••••"))
                     else:
                         masked_params.append((k, v))
@@ -112,6 +116,14 @@ def mask_secret(secret: str) -> str:
                 if len(segments) >= 3:
                     segments[-1] = "••••••••"
                     path = "/" + "/".join(segments)
+            # Mask Microsoft Teams incoming webhook path (e.g. /IncomingWebhook/<token1>/<token2>)
+            elif re.search(r"/IncomingWebhook/([^/]+)/([^/?]+)", path, flags=re.IGNORECASE):
+                path = re.sub(
+                    r"(/IncomingWebhook/)([^/]+)/([^/?]+)",
+                    r"\1••••••••••••/••••••••••••",
+                    path,
+                    flags=re.IGNORECASE,
+                )
 
             # Mask embedded basic auth credentials in netloc (e.g. https://user:pass@host/path)
             netloc = parsed.netloc

@@ -34,6 +34,7 @@ class AlertChannel(Base):
         default=True,
         server_default=text("true"),
         nullable=False,
+        index=True,
     )
     config: Mapped[str] = mapped_column(
         Text,

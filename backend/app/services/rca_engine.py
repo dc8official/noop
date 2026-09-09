@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal
 from app.services.baseline_route import refresh_baseline_route
 from app.services.diagnostics import run_throttled_traceroute
+from app.services.driver_manager import driver_manager
 
 logger = logging.getLogger(__name__)
 
@@ -201,9 +202,43 @@ async def run_differential_rca(
             rca_summary,
         )
 
+        # Query downstream symptom endpoints
+        symptom_endpoint_ids = []
+        try:
+            sym_query = text("""
+                SELECT id FROM endpoints
+                WHERE manual_parent_id = CAST(:endpoint_id AS uuid)
+                  AND endpoint_status != 'DELETED'
+            """)
+            sym_res = await session.execute(sym_query, {"endpoint_id": str(endpoint_id)})
+            if sym_res and hasattr(sym_res, "fetchall"):
+                symptom_endpoint_ids = [str(r.id) for r in sym_res.fetchall()]
+        except (Exception, StopIteration, StopAsyncIteration) as exc:
+            logger.debug("Could not query symptom endpoints: %s", exc)
+
+        # Publish RCA_INCIDENT event to event broker
+        try:
+            broker = driver_manager.get_event_broker()
+            if broker:
+                rca_payload = {
+                    "event_type": "RCA_INCIDENT",
+                    "incident_id": incident_id,
+                    "root_cause_endpoint_id": str(endpoint_id),
+                    "symptom_endpoint_ids": symptom_endpoint_ids,
+                    "failed_hop_number": failed_hop_number,
+                    "failed_hop_ip": failed_hop_ip,
+                    "last_known_good_hop_ip": last_known_good_hop_ip,
+                    "rca_summary": rca_summary,
+                }
+                await broker.publish("RCA_INCIDENT", rca_payload)
+        except Exception as exc:
+            logger.warning("Failed to publish RCA_INCIDENT event: %s", exc)
+
         return {
             "incident_id": incident_id,
             "endpoint_id": str(endpoint_id),
+            "root_cause_endpoint_id": str(endpoint_id),
+            "symptom_endpoint_ids": symptom_endpoint_ids,
             "failed_hop_number": failed_hop_number,
             "failed_hop_ip": failed_hop_ip,
             "last_known_good_hop_ip": last_known_good_hop_ip,
@@ -246,6 +281,19 @@ async def handle_endpoint_recovery(
             resolved_count,
         )
         await refresh_baseline_route(endpoint_id, target_ip, db=session)
+
+        # Publish resolution RCA_INCIDENT event
+        try:
+            broker = driver_manager.get_event_broker()
+            if broker:
+                rca_payload = {
+                    "event_type": "RCA_INCIDENT",
+                    "root_cause_endpoint_id": str(endpoint_id),
+                    "is_resolved": True,
+                }
+                await broker.publish("RCA_INCIDENT", rca_payload)
+        except Exception as exc:
+            logger.warning("Failed to publish recovery RCA_INCIDENT event: %s", exc)
 
     if db is not None:
         await _execute_recovery(db)

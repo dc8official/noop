@@ -41,6 +41,19 @@ def test_mask_secret_webhook_url():
     assert "very-secret-discord-token" not in masked_discord
     assert "••••••••" in masked_discord
 
+    teams_url = "https://outlook.office.com/webhook/tenant123/IncomingWebhook/secretTokenOne/secretTokenTwo"
+    masked_teams = mask_secret(teams_url)
+    assert "secretTokenOne" not in masked_teams
+    assert "secretTokenTwo" not in masked_teams
+    assert "••••••••••••" in masked_teams
+
+    teams_query_url = "https://custom.webhook.io/alert?access_token=my_secret_token&bearer=jwt_secret&code=otp123"
+    masked_query = mask_secret(teams_query_url)
+    assert "my_secret_token" not in masked_query
+    assert "jwt_secret" not in masked_query
+    assert "otp123" not in masked_query
+    assert "••••••••" in masked_query
+
 
 def test_mask_secret_password():
     pwd = "MySuperSecretPassword123!"

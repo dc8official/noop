@@ -1,5 +1,7 @@
 <template>
   <div id="app">
+    <Toast />
+    <ConfirmDialog />
     <header class="app-header" v-if="showNav">
       <div class="header-inner">
         <div class="brand">
@@ -108,6 +110,8 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute, RouterLink, RouterView } from 'vue-router'
+import Toast from 'primevue/toast'
+import ConfirmDialog from 'primevue/confirmdialog'
 import { logout, changePassword, getVersion } from './services/api.js'
 import { currentUser, isAdmin, mustChangePassword, loadUserFromStorage, setUserState, clearUserState } from './services/auth.js'
 import { useSSE } from './composables/useSSE.js'

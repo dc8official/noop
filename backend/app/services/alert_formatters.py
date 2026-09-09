@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from email.message import EmailMessage
+import html
 import re
 from typing import Any, Dict, Optional
+
+
+def _escape_slack_mrkdwn(text: Any) -> str:
+    """Escapes Slack special characters to prevent broadcast injection."""
+    if text is None:
+        return ""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _format_timestamp(ts: Any) -> str:
@@ -104,12 +112,18 @@ def build_polyglot_payload(
                 "facts": extra_facts[:6],
             })
 
+    safe_name = html.escape(str(endpoint_name))
+    safe_ip = html.escape(str(ip_address))
+    safe_event = html.escape(str(event_type))
+    safe_sev = html.escape(str(sev_upper))
+    safe_title = f"{status_emoji} LNMP Alert: {safe_name} is {safe_sev}"
+
     html_content = f"""
     <div style="font-family: Arial, sans-serif; border-left: 4px solid {theme_color}; padding: 12px 16px; background-color: #1e1e24; color: #f4f4f5; border-radius: 4px;">
-        <h3 style="margin: 0 0 8px 0; color: {theme_color};">{title_text}</h3>
-        <p style="margin: 4px 0;"><strong>Endpoint:</strong> {endpoint_name} (<code>{ip_address}</code>)</p>
-        <p style="margin: 4px 0;"><strong>Severity:</strong> <span style="font-weight:bold; color:{theme_color};">{sev_upper}</span></p>
-        <p style="margin: 4px 0;"><strong>Event:</strong> {event_type}</p>
+        <h3 style="margin: 0 0 8px 0; color: {theme_color};">{safe_title}</h3>
+        <p style="margin: 4px 0;"><strong>Endpoint:</strong> {safe_name} (<code>{safe_ip}</code>)</p>
+        <p style="margin: 4px 0;"><strong>Severity:</strong> <span style="font-weight:bold; color:{theme_color};">{safe_sev}</span></p>
+        <p style="margin: 4px 0;"><strong>Event:</strong> {safe_event}</p>
         <p style="margin: 4px 0;"><strong>Timestamp:</strong> {ts_str}</p>
         <div style="margin-top: 12px;">
             <a href="{url}" style="display:inline-block; padding:6px 14px; background-color:#3b82f6; color:#ffffff; text-decoration:none; border-radius:4px; font-weight:bold;">View in Console</a>
@@ -182,6 +196,7 @@ def build_discord_payload(
 
     return {
         "content": f"{emoji} **LNMP Alert:** `{endpoint_name}` transitioned to **{sev_upper}**",
+        "allowed_mentions": {"parse": []},
         "embeds": [
             {
                 "title": f"{emoji} {endpoint_name} is {sev_upper}",
@@ -213,22 +228,27 @@ def build_slack_payload(
 
     emoji = "🚨" if sev_upper in ("DOWN", "CRITICAL") else ("✅" if sev_upper in ("RECOVERED", "UP") else "⚠️")
 
+    safe_name = _escape_slack_mrkdwn(endpoint_name)
+    safe_ip = _escape_slack_mrkdwn(ip_address)
+    safe_event = _escape_slack_mrkdwn(event_type)
+    safe_sev = _escape_slack_mrkdwn(sev_upper)
+
     blocks = [
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"{emoji} LNMP Alert: {endpoint_name} is {sev_upper}",
+                "text": f"{emoji} LNMP Alert: {safe_name} is {safe_sev}",
                 "emoji": True,
             },
         },
         {
             "type": "section",
             "fields": [
-                {"type": "mrkdwn", "text": f"*Endpoint:*\n{endpoint_name}"},
-                {"type": "mrkdwn", "text": f"*IP Address:*\n`{ip_address}`"},
-                {"type": "mrkdwn", "text": f"*Severity:*\n*{sev_upper}*"},
-                {"type": "mrkdwn", "text": f"*Event Type:*\n{event_type}"},
+                {"type": "mrkdwn", "text": f"*Endpoint:*\n{safe_name}"},
+                {"type": "mrkdwn", "text": f"*IP Address:*\n`{safe_ip}`"},
+                {"type": "mrkdwn", "text": f"*Severity:*\n*{safe_sev}*"},
+                {"type": "mrkdwn", "text": f"*Event Type:*\n{safe_event}"},
             ],
         },
         {
@@ -256,7 +276,7 @@ def build_slack_payload(
         })
 
     return {
-        "text": f"{emoji} LNMP Alert: {endpoint_name} is {sev_upper}",
+        "text": f"{emoji} LNMP Alert: {safe_name} is {safe_sev}",
         "blocks": blocks,
     }
 
@@ -286,6 +306,11 @@ def build_email_mime(
 
     theme_color = "#ef4444" if sev_upper in ("DOWN", "CRITICAL") else ("#22c55e" if sev_upper in ("RECOVERED", "UP") else "#f59e0b")
 
+    safe_name = html.escape(str(endpoint_name))
+    safe_ip = html.escape(str(ip_address))
+    safe_event = html.escape(str(event_type))
+    safe_sev = html.escape(str(sev_upper))
+
     plain_body = f"""
 LNMP Enterprise Network Monitoring Alert
 ========================================
@@ -307,14 +332,14 @@ Sent by LNMP Enterprise Platform v3.1.0
 <body style="font-family: Arial, sans-serif; background-color: #0f0f12; color: #f4f4f5; margin: 0; padding: 24px;">
   <div style="max-width: 600px; margin: 0 auto; background-color: #18181b; border: 1px solid #27272a; border-radius: 8px; overflow: hidden;">
     <div style="background-color: {theme_color}; color: #ffffff; padding: 16px 20px;">
-      <h2 style="margin: 0; font-size: 18px;">LNMP Alert: {endpoint_name} is {sev_upper}</h2>
+      <h2 style="margin: 0; font-size: 18px;">LNMP Alert: {safe_name} is {safe_sev}</h2>
     </div>
     <div style="padding: 20px;">
       <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
-        <tr><td style="padding: 6px 0; color: #a1a1aa; width: 120px;">Endpoint:</td><td style="font-weight: bold; color: #ffffff;">{endpoint_name}</td></tr>
-        <tr><td style="padding: 6px 0; color: #a1a1aa;">IP Address:</td><td><code>{ip_address}</code></td></tr>
-        <tr><td style="padding: 6px 0; color: #a1a1aa;">Severity:</td><td style="font-weight: bold; color: {theme_color};">{sev_upper}</td></tr>
-        <tr><td style="padding: 6px 0; color: #a1a1aa;">Event:</td><td>{event_type}</td></tr>
+        <tr><td style="padding: 6px 0; color: #a1a1aa; width: 120px;">Endpoint:</td><td style="font-weight: bold; color: #ffffff;">{safe_name}</td></tr>
+        <tr><td style="padding: 6px 0; color: #a1a1aa;">IP Address:</td><td><code>{safe_ip}</code></td></tr>
+        <tr><td style="padding: 6px 0; color: #a1a1aa;">Severity:</td><td style="font-weight: bold; color: {theme_color};">{safe_sev}</td></tr>
+        <tr><td style="padding: 6px 0; color: #a1a1aa;">Event:</td><td>{safe_event}</td></tr>
         <tr><td style="padding: 6px 0; color: #a1a1aa;">Timestamp:</td><td>{ts_str}</td></tr>
       </table>
       <div style="text-align: center; margin-top: 24px;">

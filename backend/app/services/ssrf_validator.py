@@ -12,6 +12,9 @@ BLOCKED_IPS = {
 }
 
 
+CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
 def validate_outbound_url(url: str, allow_private: bool | None = None) -> None:
     """
     Validates that a URL is safe for outbound dispatch (webhook / telemetry push).
@@ -83,9 +86,9 @@ def validate_outbound_url(url: str, allow_private: bool | None = None) -> None:
                     f"SSRF violation: Host '{hostname}' resolves to invalid/reserved address {str_ip}."
                 )
 
-            if not allow_private and ip.is_private:
+            if not allow_private and (not ip.is_global or ip.is_private or (ip.version == 4 and ip in CGNAT_NETWORK)):
                 raise ValueError(
-                    f"SSRF violation: Host '{hostname}' resolves to private network address {str_ip}."
+                    f"SSRF violation: Host '{hostname}' resolves to non-global or private network address {str_ip}."
                 )
 
     except socket.gaierror as err:

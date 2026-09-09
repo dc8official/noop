@@ -520,6 +520,8 @@ async def csv_generator(
     last_start_time: Optional[datetime] = None
     last_id: Optional[UUID] = None
     limit = 1000
+    batch_buffer_size = 500
+    buffered_rows = 0
 
     try:
         while True:
@@ -600,9 +602,13 @@ async def csv_generator(
                     "Avg_RTT_ms": rtt_val,
                 }
                 writer.writerow([row_data_map[c] for c in selected_cols])
-                yield output.getvalue()
-                output.seek(0)
-                output.truncate(0)
+                buffered_rows += 1
+
+                if buffered_rows >= batch_buffer_size:
+                    yield output.getvalue()
+                    output.seek(0)
+                    output.truncate(0)
+                    buffered_rows = 0
 
             last_ev = rows[-1][0]
             last_start_time = last_ev.start_time
@@ -610,6 +616,14 @@ async def csv_generator(
 
             if len(rows) < limit:
                 break
+
+        if buffered_rows > 0:
+            remaining = output.getvalue()
+            if remaining:
+                yield remaining
+            output.seek(0)
+            output.truncate(0)
+            buffered_rows = 0
     finally:
         output.close()
 

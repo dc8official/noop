@@ -33,6 +33,10 @@ UPGRADE_BRANCH="${NETMON_BRANCH:-main}"
 ENV_FILE="/etc/netmon/netmon.env"
 if [[ -f "${ENV_FILE}" ]]; then
     echo -e "${GREEN}[INFO] Loading environment configuration from ${ENV_FILE}${NC}"
+    if [[ ${DRY_RUN} -eq 0 ]]; then
+        chmod 0600 "${ENV_FILE}"
+        chown netmon:netmon "${ENV_FILE}" 2>/dev/null || true
+    fi
     # shellcheck disable=SC1090
     set -a
     source "${ENV_FILE}"

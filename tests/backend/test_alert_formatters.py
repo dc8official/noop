@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import html
 import pytest
 from app.services.alert_formatters import (
     build_discord_payload,
@@ -95,3 +96,59 @@ def test_build_email_mime_crlf_sanitization():
     assert len(parts) == 2
     assert parts[0].get_content_type() == "text/plain"
     assert parts[1].get_content_type() == "text/html"
+
+
+def test_html_sanitization_in_email_and_polyglot():
+    malicious_name = "<script>alert('xss')</script>"
+    malicious_ip = "1.2.3.4<img src=x onerror=alert(1)>"
+    malicious_event = "STATE<script>"
+
+    # Test Email MIME
+    msg = build_email_mime(
+        to_email="ops@corp.net",
+        from_email="alerts@corp.net",
+        endpoint_name=malicious_name,
+        ip_address=malicious_ip,
+        event_type=malicious_event,
+        severity="DOWN",
+    )
+    parts = list(msg.iter_parts())
+    html_payload = parts[1].get_payload(decode=True).decode("utf-8")
+    assert "<script>" not in html_payload
+    assert html.escape(malicious_name) in html_payload
+    assert html.escape(malicious_ip) in html_payload
+
+    # Test Polyglot Webhook HTML
+    poly = build_polyglot_payload(
+        endpoint_name=malicious_name,
+        ip_address=malicious_ip,
+        event_type=malicious_event,
+        severity="DOWN",
+    )
+    assert "<script>" not in poly["html_content"]
+    assert html.escape(malicious_name) in poly["html_content"]
+
+
+def test_discord_payload_allowed_mentions_defense():
+    payload = build_discord_payload(
+        endpoint_name="core-router",
+        ip_address="10.0.0.1",
+        event_type="STATE_TRANSITION",
+        severity="DOWN",
+    )
+    assert "allowed_mentions" in payload
+    assert payload["allowed_mentions"] == {"parse": []}
+
+
+def test_slack_payload_mrkdwn_escaping():
+    payload = build_slack_payload(
+        endpoint_name="router <!channel> & test",
+        ip_address="10.0.0.1",
+        event_type="STATE_TRANSITION <here>",
+        severity="DOWN",
+    )
+    assert "<!channel>" not in payload["text"]
+    assert "&lt;!channel&gt; &amp; test" in payload["text"]
+    endpoint_field = payload["blocks"][1]["fields"][0]["text"]
+    assert "&lt;!channel&gt; &amp; test" in endpoint_field
+

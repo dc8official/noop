@@ -229,3 +229,141 @@ async def test_leader_election_active_leader():
 
         await dispatcher.stop()
         assert any("pg_advisory_unlock" in str(call.args[0]) for call in mock_conn.execute.call_args_list)
+
+
+@pytest.mark.anyio
+async def test_standby_worker_failover_promotion():
+    from unittest.mock import MagicMock
+
+    dispatcher = AlertDispatcher()
+    mock_conn1 = AsyncMock()
+    mock_res1 = MagicMock()
+    mock_res1.scalar.return_value = False  # Initial start fails to acquire lock
+    mock_conn1.execute = AsyncMock(return_value=mock_res1)
+    mock_conn1.close = AsyncMock()
+
+    mock_conn2 = AsyncMock()
+    mock_res2 = MagicMock()
+    mock_res2.scalar.return_value = True  # Retry in election loop acquires lock
+    mock_conn2.execute = AsyncMock(return_value=mock_res2)
+    mock_conn2.close = AsyncMock()
+
+    async def fake_listen(channel):
+        await asyncio.sleep(3600)
+
+    # Patch sleep in election loop to run immediately
+    with patch("app.services.alert_dispatcher.async_engine") as mock_engine, \
+         patch("app.services.alert_dispatcher.asyncio.sleep", return_value=None), \
+         patch.object(dispatcher, "_listen_broker", side_effect=fake_listen):
+        mock_engine.dialect.name = "postgresql"
+        mock_engine.connect = AsyncMock(side_effect=[mock_conn1, mock_conn2])
+
+        await dispatcher.start()
+        assert dispatcher._is_leader is False
+
+        # Wait briefly for election loop task to iterate
+        if dispatcher._election_task:
+            await asyncio.wait_for(dispatcher._election_task, timeout=1.0)
+
+        assert dispatcher._is_leader is True
+        task_names = [t.get_name() for t in dispatcher._tasks]
+        assert "alert_broker_state_trans" in task_names
+        assert "alert_broker_rca" in task_names
+
+        await dispatcher.stop()
+        assert dispatcher._is_leader is False
+
+
+@pytest.mark.anyio
+async def test_rca_cascade_suppression_child_event():
+    from unittest.mock import MagicMock
+    from uuid import uuid4
+
+    dispatcher = AlertDispatcher()
+    now = datetime.now(timezone.utc)
+    parent_id = str(uuid4())
+    child_id = str(uuid4())
+    incident_id = str(uuid4())
+
+    # 1. RCA Incident event arrives
+    rca_data = {
+        "event_type": "RCA_INCIDENT",
+        "incident_id": incident_id,
+        "root_cause_endpoint_id": parent_id,
+        "symptom_endpoint_ids": [child_id],
+    }
+    await dispatcher._dispatch_event("RCA_INCIDENT", rca_data)
+    assert child_id in dispatcher._suppressed_children
+
+    # 2. Child state transition arrives
+    dispatcher._is_alerting_enabled = AsyncMock(return_value=True)
+    dispatcher._record_delivery_log = AsyncMock()
+    dispatcher._evaluate_and_send_channel = AsyncMock()
+
+    mock_channel = MagicMock()
+    mock_channel.id = uuid4()
+    mock_channel.name = "Mock Channel"
+
+    mock_session = AsyncMock()
+    mock_res = MagicMock()
+    mock_res.scalars.return_value.all.return_value = [mock_channel]
+    mock_session.execute.return_value = mock_res
+    mock_session.__aenter__.return_value = mock_session
+    mock_session.__aexit__.return_value = None
+
+    with patch("app.services.alert_dispatcher.AsyncSessionLocal", return_value=mock_session):
+        child_event = {
+            "endpoint_id": child_id,
+            "hostname": "child-switch-01",
+            "ip_address": "10.0.1.5",
+            "operational_state": "DOWN",
+        }
+        await dispatcher._dispatch_event("STATE_TRANSITION", child_event)
+
+        # evaluate_and_send_channel should NOT be called (suppressed)
+        dispatcher._evaluate_and_send_channel.assert_not_called()
+        # Throttled delivery log recorded with reason
+        dispatcher._record_delivery_log.assert_called()
+        kwargs = dispatcher._record_delivery_log.call_args[1]
+        assert kwargs["status"] == "THROTTLED"
+        assert "Suppressed by upstream root cause" in kwargs["response_message"]
+
+
+@pytest.mark.anyio
+async def test_rate_limit_timing_on_provider_error():
+    from unittest.mock import MagicMock
+    from uuid import uuid4
+
+    dispatcher = AlertDispatcher()
+    channel = MagicMock()
+    channel.id = uuid4()
+    channel.name = "Rate Limit Error Test"
+    channel.channel_type = "GENERIC_WEBHOOK"
+    channel.endpoint_ids = []
+    channel.severity_filters = []
+    channel.subnet_filters = []
+    channel.config = '{"webhook_url": "https://8.8.8.8/hook"}'
+
+    ep_id = uuid4()
+    rl_key = (str(channel.id), str(ep_id), "DOWN")
+
+    # Simulate network failure in _send_to_provider
+    dispatcher._send_to_provider = AsyncMock(side_effect=Exception("Connection timed out"))
+    dispatcher._record_delivery_log = AsyncMock()
+
+    await dispatcher._evaluate_and_send_channel(
+        db=None,
+        channel=channel,
+        endpoint_id=ep_id,
+        endpoint_name="Unstable-Gateway",
+        ip_address="192.168.1.1",
+        event_type="STATE_TRANSITION",
+        severity="DOWN",
+        timestamp=datetime.now(timezone.utc),
+        details={},
+        is_flapping=False,
+    )
+
+    # Delivery failed, so rate limit timestamp must NOT be recorded
+    assert rl_key not in dispatcher._rate_limits
+
