@@ -5,6 +5,7 @@ import logging
 from typing import Any, Dict, List
 
 from app.routers.events import broadcast_sse_event
+from app.services.alert_dispatcher import alert_dispatcher
 from app.services.driver_manager import driver_manager
 from app.services.topology import topology_manager
 
@@ -39,6 +40,12 @@ class TelemetryRelay:
             asyncio.create_task(
                 self._listen_channel("NODE_STATE_CHANGE"),
                 name="telemetry_relay_node_state_change",
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                self._listen_channel("RCA_INCIDENT"),
+                name="telemetry_relay_rca_incident",
             )
         )
         logger.info("TelemetryRelay started listening to inter-process broker channels.")
@@ -93,6 +100,10 @@ class TelemetryRelay:
 
             # 2. Push SSE event payload to connected browser streams
             await broadcast_sse_event(channel, data)
+
+            # 3. Asynchronously enqueue to Enterprise Alert Dispatcher
+            if channel in ("STATE_TRANSITION", "RCA_INCIDENT", "NODE_STATE_CHANGE"):
+                await alert_dispatcher.enqueue_event(channel, data)
         except Exception as exc:
             logger.error(
                 "TelemetryRelay: failed to process event on channel '%s': %s",

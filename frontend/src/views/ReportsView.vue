@@ -280,19 +280,36 @@
             </div>
           </div>
 
-          <!-- Section 3: Telemetry Schema Preview -->
+          <!-- Section 3: Telemetry Schema Preview & Column Customizer -->
           <div class="form-section">
-            <label class="section-label">Included CSV Columns</label>
-            <div class="column-chips">
-              <span class="column-chip active">✓ Endpoint ID</span>
-              <span class="column-chip active">✓ Hostname</span>
-              <span class="column-chip active">✓ IP Address</span>
-              <span class="column-chip active">✓ Device Type</span>
-              <span class="column-chip active">✓ Timestamp (ISO UTC)</span>
-              <span class="column-chip active">✓ Operational State</span>
-              <span class="column-chip active">✓ Detailed State</span>
-              <span class="column-chip active">✓ Health Score / Loss %</span>
-              <span class="column-chip active">✓ Avg Latency (RTT ms)</span>
+            <div class="column-customizer-header">
+              <label class="section-label">Included CSV Columns ({{ selectedColumns.length }}/{{ availableColumns.length }})</label>
+              <div class="column-quick-actions">
+                <button type="button" class="btn-text-action" @click="selectAllColumns">Select All</button>
+                <span class="action-divider">•</span>
+                <button type="button" class="btn-text-action" @click="resetToStandardColumns">Reset to Standard</button>
+              </div>
+            </div>
+            <div class="column-grid">
+              <div 
+                v-for="col in availableColumns" 
+                :key="col.id" 
+                class="column-custom-item" 
+                :class="{ locked: col.locked, active: isColumnSelected(col.id) }"
+                @click="toggleColumn(col)"
+              >
+                <div class="column-item-check">
+                  <span v-if="col.locked" class="locked-icon" title="Required Enterprise Traceability Field">🔒</span>
+                  <input 
+                    v-else 
+                    type="checkbox" 
+                    :checked="isColumnSelected(col.id)" 
+                    @click.stop="toggleColumn(col)"
+                  />
+                </div>
+                <span class="column-item-label">{{ col.label }}</span>
+                <span v-if="col.locked" class="locked-badge">LOCKED</span>
+              </div>
             </div>
           </div>
         </div>
@@ -479,6 +496,42 @@ const exportRange = ref('24h')
 const exportCustomStart = ref(new Date(Date.now() - 24 * 3600 * 1000).toISOString().slice(0, 16))
 const exportCustomEnd = ref(new Date().toISOString().slice(0, 16))
 
+const availableColumns = [
+  { id: 'Hostname', label: 'Hostname', locked: true },
+  { id: 'IP_Address', label: 'IP Address', locked: true },
+  { id: 'Endpoint_ID', label: 'Endpoint ID', locked: false },
+  { id: 'Device_Type', label: 'Device Type', locked: false },
+  { id: 'Timestamp', label: 'Timestamp UTC', locked: false },
+  { id: 'Operational_State', label: 'Operational State', locked: false },
+  { id: 'Detailed_State', label: 'Detailed State', locked: false },
+  { id: 'Packet_Success_Rate', label: 'Health Score / Packet Loss %', locked: false },
+  { id: 'Avg_RTT_ms', label: 'Avg Latency (RTT ms)', locked: false },
+]
+
+const standardColumns = ['Hostname', 'IP_Address', 'Device_Type', 'Timestamp', 'Operational_State', 'Detailed_State', 'Packet_Success_Rate', 'Avg_RTT_ms']
+const selectedColumns = ref([...standardColumns])
+
+function isColumnSelected(colId) {
+  return selectedColumns.value.includes(colId)
+}
+
+function toggleColumn(col) {
+  if (col.locked) return
+  if (isColumnSelected(col.id)) {
+    selectedColumns.value = selectedColumns.value.filter(c => c !== col.id)
+  } else {
+    selectedColumns.value.push(col.id)
+  }
+}
+
+function selectAllColumns() {
+  selectedColumns.value = availableColumns.map(c => c.id)
+}
+
+function resetToStandardColumns() {
+  selectedColumns.value = [...standardColumns]
+}
+
 const isAllExportSelected = computed(() => {
   return endpoints.value.length > 0 && exportSelectedIds.value.length === endpoints.value.length
 })
@@ -522,7 +575,7 @@ async function triggerExport() {
   }
 
   try {
-    const res = await exportBatchTelemetry(targetIds, start, end)
+    const res = await exportBatchTelemetry(targetIds, start, end, selectedColumns.value)
     const blob = new Blob([res.data], { type: 'text/csv' })
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -860,7 +913,7 @@ onMounted(() => {
   border: 1px solid var(--border-color);
   border-radius: var(--radius, 8px);
   width: 100%;
-  max-width: 640px;
+  max-width: 820px;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
@@ -1009,25 +1062,99 @@ onMounted(() => {
   margin-top: 0.5rem;
 }
 
-.column-chips {
+.column-customizer-header {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
 }
 
-.column-chip {
+.column-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-text-action {
+  background: transparent;
+  border: none;
   font-size: 0.75rem;
   font-weight: 600;
-  padding: 0.25rem 0.5rem;
-  border-radius: var(--radius-sm, 4px);
-  background: var(--bg-surface-selected);
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
+  color: var(--color-primary, #3b82f6);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.column-chip.active {
+.btn-text-action:hover {
+  color: var(--color-primary-hover, #60a5fa);
+}
+
+.action-divider {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.column-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.5rem;
+}
+
+.column-custom-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-surface-selected);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.column-custom-item:hover:not(.locked) {
+  border-color: var(--color-primary, #3b82f6);
+}
+
+.column-custom-item.active {
+  border-color: var(--border-color-strong, #52525b);
+}
+
+.column-custom-item.locked {
+  background: rgba(255, 255, 255, 0.03);
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+
+.column-item-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+}
+
+.locked-icon {
+  font-size: 0.75rem;
+}
+
+.column-item-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
   color: var(--text-primary);
-  border-color: var(--border-color-strong, var(--border-color));
+  flex: 1;
+}
+
+.locked-badge {
+  font-size: 0.625rem;
+  font-weight: 700;
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
 }
 
 .modal-footer {

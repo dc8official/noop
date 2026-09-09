@@ -431,6 +431,7 @@ class BatchExportRequest(BaseModel):
     endpoint_ids: List[UUID]
     start_time: datetime
     end_time: datetime
+    columns: Optional[List[str]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -442,12 +443,8 @@ def sanitize_csv_field(val: Any) -> str:
     return s
 
 
-async def csv_generator(
-    endpoint_ids: List[UUID], start_time: datetime, end_time: datetime
-):
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
+def resolve_export_columns(requested_columns: Optional[List[str]]) -> List[str]:
+    standard_order = [
         "Endpoint_ID",
         "Hostname",
         "IP_Address",
@@ -457,7 +454,65 @@ async def csv_generator(
         "Detailed_State",
         "Packet_Success_Rate",
         "Avg_RTT_ms",
-    ])
+    ]
+    if not requested_columns:
+        return standard_order
+
+    valid_map = {
+        "endpoint_id": "Endpoint_ID",
+        "hostname": "Hostname",
+        "ip_address": "IP_Address",
+        "device_type": "Device_Type",
+        "timestamp": "Timestamp",
+        "operational_state": "Operational_State",
+        "detailed_state": "Detailed_State",
+        "packet_success_rate": "Packet_Success_Rate",
+        "health_score": "Packet_Success_Rate",
+        "loss": "Packet_Success_Rate",
+        "avg_rtt_ms": "Avg_RTT_ms",
+        "rtt": "Avg_RTT_ms",
+        "latency": "Avg_RTT_ms",
+    }
+
+    normalized_selected = set()
+    for col in requested_columns:
+        clean = (
+            col.lower()
+            .strip()
+            .replace(" ", "_")
+            .replace("-", "_")
+            .replace("_(rtt_ms)", "")
+            .replace("_(iso_utc)", "")
+            .replace("/_packet_loss_%", "")
+            .replace("/_loss_%", "")
+        )
+        matched = None
+        for k, target in valid_map.items():
+            if k in clean or clean in k:
+                matched = target
+                break
+        if matched:
+            normalized_selected.add(matched)
+        elif col in standard_order:
+            normalized_selected.add(col)
+
+    # Guarantee Hostname and IP_Address are always included
+    normalized_selected.add("Hostname")
+    normalized_selected.add("IP_Address")
+
+    return [col for col in standard_order if col in normalized_selected]
+
+
+async def csv_generator(
+    endpoint_ids: List[UUID],
+    start_time: datetime,
+    end_time: datetime,
+    columns: Optional[List[str]] = None,
+):
+    selected_cols = resolve_export_columns(columns)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(selected_cols)
     yield output.getvalue()
     output.seek(0)
     output.truncate(0)
@@ -533,17 +588,18 @@ async def csv_generator(
                     else ""
                 )
 
-                writer.writerow([
-                    endpoint_id_str,
-                    hostname_str,
-                    ip_str,
-                    dev_type_str,
-                    ts_str,
-                    op_state,
-                    det_state,
-                    success_rate,
-                    rtt_val,
-                ])
+                row_data_map = {
+                    "Endpoint_ID": endpoint_id_str,
+                    "Hostname": hostname_str,
+                    "IP_Address": ip_str,
+                    "Device_Type": dev_type_str,
+                    "Timestamp": ts_str,
+                    "Operational_State": op_state,
+                    "Detailed_State": det_state,
+                    "Packet_Success_Rate": success_rate,
+                    "Avg_RTT_ms": rtt_val,
+                }
+                writer.writerow([row_data_map[c] for c in selected_cols])
                 yield output.getvalue()
                 output.seek(0)
                 output.truncate(0)
@@ -572,7 +628,10 @@ async def batch_export_telemetry(
     )
 
     generator = csv_generator(
-        request.endpoint_ids, request.start_time, request.end_time
+        request.endpoint_ids,
+        request.start_time,
+        request.end_time,
+        request.columns,
     )
 
     return StreamingResponse(

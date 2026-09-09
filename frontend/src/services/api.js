@@ -105,14 +105,18 @@ export function getAuditLogs(params = {}) {
   return api.get('/reports/audit-logs', { params })
 }
 
-export function exportBatchTelemetry(endpointIds, startTime, endTime) {
+export function exportBatchTelemetry(endpointIds, startTime, endTime, columns = null) {
+  const payload = {
+    endpoint_ids: endpointIds,
+    start_time: startTime,
+    end_time: endTime,
+  }
+  if (columns && columns.length > 0) {
+    payload.columns = columns
+  }
   return api.post(
     '/telemetry/export/batch',
-    {
-      endpoint_ids: endpointIds,
-      start_time: startTime,
-      end_time: endTime,
-    },
+    payload,
     {
       responseType: 'blob',
     }
@@ -188,5 +192,38 @@ export function getSettings() {
 
 export function updateSettings(data) {
   return api.patch('/settings', data)
+}
+
+export function getAlertChannels() {
+  return api.get('/alerts/channels')
+}
+
+export function createAlertChannel(data) {
+  return api.post('/alerts/channels', data)
+}
+
+export function getAlertChannel(id) {
+  return api.get(`/alerts/channels/${id}`)
+}
+
+export function updateAlertChannel(id, data) {
+  return api.put(`/alerts/channels/${id}`, data)
+}
+
+export function deleteAlertChannel(id) {
+  return api.delete(`/alerts/channels/${id}`)
+}
+
+export function testAlertChannel(data) {
+  return api.post('/alerts/channels/test', data)
+}
+
+export function getAlertHistory(page = 1, pageSize = 50) {
+  return api.get('/alerts/history', {
+    params: {
+      page,
+      page_size: pageSize,
+    },
+  })
 }
 

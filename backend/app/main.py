@@ -11,6 +11,7 @@ from app.config import settings
 from app.database import AsyncSessionLocal, check_database_connection
 from app.logging_config import setup_logging
 from app.routers import (
+    alerts,
     auth,
     endpoints,
     events,
@@ -21,6 +22,7 @@ from app.routers import (
 )
 from app.routers.reports import telemetry_router
 from app.schemas import APIResponse
+from app.services.alert_dispatcher import alert_dispatcher
 from app.services.baseline_route import start_midnight_discovery_worker
 from app.services.baseline_service import baseline_cache, start_baseline_refresh_task
 from app.services.diagnostics import (
@@ -52,6 +54,8 @@ async def lifespan(app: FastAPI):
 
     # Start inter-process telemetry relay (syncs broker events to topology RAM and browser SSE)
     await telemetry_relay.start()
+    # Start Enterprise Alert Dispatcher background worker
+    await alert_dispatcher.start()
 
     refresh_task = await start_baseline_refresh_task(
         AsyncSessionLocal, interval_seconds=3600
@@ -62,15 +66,16 @@ async def lifespan(app: FastAPI):
         AsyncSessionLocal, interval_seconds=86400
     )
     logger.info(
-        "LNMP v3.0.0 started successfully with Real-Time SSE, Dual-Storage Architecture & Multi-Protocol Diagnostics."
+        "LNMP v3.1.0 started successfully with Enterprise Alerting, Dual-Storage & Multi-Protocol Diagnostics."
     )
     yield
+    await alert_dispatcher.stop()
     await telemetry_relay.stop()
     refresh_task.cancel()
     discovery_task.cancel()
     midnight_task.cancel()
     cleanup_task.cancel()
-    logger.info("LNMP v3.0.0 platform shutting down cleanly.")
+    logger.info("LNMP v3.1.0 platform shutting down cleanly.")
 
 
 app = FastAPI(
@@ -172,6 +177,7 @@ class HSTSMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(HSTSMiddleware)
 
+app.include_router(alerts.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(endpoints.router, prefix="/api/v1")
 app.include_router(events.router, prefix="/api/v1")

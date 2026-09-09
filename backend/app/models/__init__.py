@@ -1,3 +1,5 @@
+from app.models.alert_channel import AlertChannel
+from app.models.alert_delivery_log import AlertDeliveryLog
 from app.models.audit_log import AuditLog
 from app.models.baseline_route import EndpointBaselineRoute
 from app.models.diagnostic_trace import EndpointDiagnosticTrace
@@ -9,6 +11,8 @@ from app.models.user import Role, User
 from app.models.user_session import UserSession
 
 __all__ = [
+    "AlertChannel",
+    "AlertDeliveryLog",
     "Endpoint",
     "User",
     "Role",
