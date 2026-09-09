@@ -5,7 +5,6 @@ import logging
 from typing import Any, Dict, List
 
 from app.routers.events import broadcast_sse_event
-from app.services.alert_dispatcher import alert_dispatcher
 from app.services.driver_manager import driver_manager
 from app.services.topology import topology_manager
 
@@ -100,10 +99,6 @@ class TelemetryRelay:
 
             # 2. Push SSE event payload to connected browser streams
             await broadcast_sse_event(channel, data)
-
-            # 3. Asynchronously enqueue to Enterprise Alert Dispatcher
-            if channel in ("STATE_TRANSITION", "RCA_INCIDENT", "NODE_STATE_CHANGE"):
-                await alert_dispatcher.enqueue_event(channel, data)
         except Exception as exc:
             logger.error(
                 "TelemetryRelay: failed to process event on channel '%s': %s",

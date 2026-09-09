@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from math import ceil
@@ -100,7 +101,7 @@ async def create_alert_channel(
         if not url:
             raise HTTPException(status_code=400, detail="Webhook URL is required for webhook channels.")
         try:
-            validate_outbound_url(url)
+            await asyncio.to_thread(validate_outbound_url, url)
         except ValueError as err:
             raise HTTPException(status_code=400, detail=str(err))
 
@@ -206,7 +207,7 @@ async def update_alert_channel(
             url = merged_cfg.get("webhook_url")
             if url:
                 try:
-                    validate_outbound_url(url)
+                    await asyncio.to_thread(validate_outbound_url, url)
                 except ValueError as err:
                     raise HTTPException(status_code=400, detail=str(err))
 
@@ -283,6 +284,13 @@ async def test_alert_channel(
             "channel_type": payload.channel_type.upper(),
             "config": payload.config,
         }
+        if test_ch["channel_type"] in ("TEAMS", "DISCORD", "SLACK", "GENERIC_WEBHOOK"):
+            url = test_ch["config"].get("webhook_url")
+            if url:
+                try:
+                    await asyncio.to_thread(validate_outbound_url, url)
+                except ValueError as err:
+                    raise HTTPException(status_code=400, detail=str(err))
         result = await alert_dispatcher.send_test_alert(test_ch)
     else:
         raise HTTPException(status_code=400, detail="Must provide either channel_id or channel_type and config.")

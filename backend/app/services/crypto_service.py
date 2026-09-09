@@ -113,9 +113,19 @@ def mask_secret(secret: str) -> str:
                     segments[-1] = "••••••••"
                     path = "/" + "/".join(segments)
 
+            # Mask embedded basic auth credentials in netloc (e.g. https://user:pass@host/path)
+            netloc = parsed.netloc
+            if "@" in netloc:
+                user_info, host = netloc.split("@", 1)
+                if ":" in user_info:
+                    user, _ = user_info.split(":", 1)
+                    netloc = f"{user}:••••••••@{host}"
+                else:
+                    netloc = f"••••••••@{host}"
+
             masked_url = urlunparse((
                 parsed.scheme,
-                parsed.netloc,
+                netloc,
                 path,
                 parsed.params,
                 new_query,

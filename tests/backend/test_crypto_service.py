@@ -47,3 +47,10 @@ def test_mask_secret_password():
     masked = mask_secret(pwd)
     assert "MySuperSecret" not in masked
     assert masked == "••••••••••••"
+
+
+def test_mask_secret_basic_auth_url():
+    url = "https://admin:secret123@host.com/hook"
+    masked = mask_secret(url)
+    assert masked == "https://admin:••••••••@host.com/hook"
+    assert "secret123" not in masked

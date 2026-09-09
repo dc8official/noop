@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import ipaddress
 import json
 import logging
 import smtplib
@@ -10,10 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
 
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, async_engine
 from app.models.alert_channel import AlertChannel
+
+ADVISORY_LOCK_ID = 992817
 from app.models.alert_delivery_log import AlertDeliveryLog
 from app.models.system_setting import AppSetting
 from app.services.alert_formatters import (
@@ -38,6 +41,8 @@ class AlertDispatcher:
 
     def __init__(self) -> None:
         self._running: bool = False
+        self._is_leader: bool = False
+        self._lock_conn: Any = None
         self._tasks: List[asyncio.Task] = []
         self._queue: asyncio.Queue[Tuple[str, Dict[str, Any]]] = asyncio.Queue(maxsize=1000)
 
@@ -51,10 +56,34 @@ class AlertDispatcher:
         if self._running:
             return
         self._running = True
+
+        # Start queue consumer worker
         self._tasks.append(asyncio.create_task(self._process_queue(), name="alert_dispatcher_queue"))
-        self._tasks.append(asyncio.create_task(self._listen_broker("STATE_TRANSITION"), name="alert_broker_state_trans"))
-        self._tasks.append(asyncio.create_task(self._listen_broker("RCA_INCIDENT"), name="alert_broker_rca"))
-        logger.info("AlertDispatcher engine started with background subscriber workers.")
+
+        # Attempt Leader Election via PostgreSQL Session Advisory Lock
+        try:
+            if async_engine.dialect.name == "postgresql":
+                self._lock_conn = await async_engine.connect()
+                res = await self._lock_conn.execute(text(f"SELECT pg_try_advisory_lock({ADVISORY_LOCK_ID})"))
+                acquired = bool(res.scalar())
+                if not acquired:
+                    logger.info("[AlertDispatcher] Running in standby mode (passive worker).")
+                    if self._lock_conn:
+                        await self._lock_conn.close()
+                        self._lock_conn = None
+                    self._is_leader = False
+                    return
+                self._is_leader = True
+            else:
+                self._is_leader = True
+        except Exception as exc:
+            logger.warning("AlertDispatcher: advisory lock election failed: %s. Continuing in leader mode.", exc)
+            self._is_leader = True
+
+        if self._is_leader:
+            self._tasks.append(asyncio.create_task(self._listen_broker("STATE_TRANSITION"), name="alert_broker_state_trans"))
+            self._tasks.append(asyncio.create_task(self._listen_broker("RCA_INCIDENT"), name="alert_broker_rca"))
+            logger.info("[AlertDispatcher] Active leader election won. Broker listeners started.")
 
     async def stop(self) -> None:
         self._running = False
@@ -63,11 +92,25 @@ class AlertDispatcher:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
             self._tasks.clear()
+
+        if self._is_leader and self._lock_conn:
+            try:
+                await self._lock_conn.execute(text(f"SELECT pg_advisory_unlock({ADVISORY_LOCK_ID})"))
+            except Exception as exc:
+                logger.warning("AlertDispatcher: failed to release advisory lock: %s", exc)
+            finally:
+                try:
+                    await self._lock_conn.close()
+                except Exception:
+                    pass
+                self._lock_conn = None
+
+        self._is_leader = False
         logger.info("AlertDispatcher engine stopped.")
 
     async def enqueue_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Enqueue an event for asynchronous dispatching without blocking caller."""
-        if not self._running:
+        if not self._running or not self._is_leader:
             return
         try:
             self._queue.put_nowait((event_type, data))
@@ -89,10 +132,35 @@ class AlertDispatcher:
                 logger.warning("AlertDispatcher: subscription to '%s' failed: %s. Reconnecting in 3s...", channel, exc)
                 await asyncio.sleep(3.0)
 
+    def _prune_memory_caches(self, now: datetime) -> None:
+        """
+        Evicts stale rate-limit and flapping tracker entries to eliminate memory leaks:
+        - Rate limits where last_sent < now - 1 hour.
+        - Flapping tracker keys where all timestamps < now - 10 minutes or list is empty.
+        """
+        rl_cutoff = now - timedelta(hours=1)
+        expired_rl = [k for k, last_sent in self._rate_limits.items() if last_sent < rl_cutoff]
+        for k in expired_rl:
+            del self._rate_limits[k]
+
+        flap_cutoff = now - timedelta(minutes=10)
+        expired_flaps = []
+        for ep_key, timestamps in list(self._flapping_tracker.items()):
+            active_ts = [t for t in timestamps if t >= flap_cutoff]
+            if not active_ts:
+                expired_flaps.append(ep_key)
+            else:
+                self._flapping_tracker[ep_key] = active_ts
+
+        for ep_key in expired_flaps:
+            del self._flapping_tracker[ep_key]
+
     async def _process_queue(self) -> None:
         while self._running:
             try:
                 event_type, data = await self._queue.get()
+                now = datetime.now(timezone.utc)
+                self._prune_memory_caches(now)
                 try:
                     await self._dispatch_event(event_type, data)
                 finally:
@@ -195,11 +263,44 @@ class AlertDispatcher:
             if endpoint_id and str(endpoint_id) not in [str(x) for x in channel.endpoint_ids]:
                 return
 
+        # Check subnet filter
+        if channel.subnet_filters and len(channel.subnet_filters) > 0:
+            try:
+                ep_ip = ipaddress.ip_address(ip_address)
+                matched = False
+                for cidr in channel.subnet_filters:
+                    try:
+                        network = ipaddress.ip_network(cidr, strict=False)
+                        if ep_ip in network:
+                            matched = True
+                            break
+                    except ValueError:
+                        continue
+                if not matched:
+                    return
+            except ValueError:
+                return
+
         # Check severity filter
         if channel.severity_filters and len(channel.severity_filters) > 0:
             allowed_sevs = [s.upper() for s in channel.severity_filters]
             if severity.upper() not in allowed_sevs:
                 return
+
+        # Check Flapping Suppression
+        if is_flapping:
+            await self._record_delivery_log(
+                db=db,
+                channel_id=channel.id,
+                channel_name=channel.name,
+                endpoint_id=UUID(str(endpoint_id)) if endpoint_id else None,
+                endpoint_name=endpoint_name,
+                event_type=event_type,
+                status="THROTTLED",
+                status_code=None,
+                response_message="Suppressed: Endpoint is flapping (>= 4 transitions in 10 minutes). Alerts quarantined for 15 minutes.",
+            )
+            return
 
         # Check Rate Limit (5 minutes per channel, endpoint, severity)
         rl_key = (str(channel.id), str(endpoint_id), severity)
@@ -288,7 +389,7 @@ class AlertDispatcher:
             if not webhook_url:
                 raise ValueError(f"Webhook URL missing in {channel_type} configuration.")
 
-            validate_outbound_url(webhook_url)
+            await asyncio.to_thread(validate_outbound_url, webhook_url)
 
             if ctype == "TEAMS":
                 payload = build_polyglot_payload(
@@ -461,6 +562,10 @@ class AlertDispatcher:
         ip_addr = "192.168.100.1"
 
         try:
+            webhook_url = config.get("webhook_url")
+            if webhook_url:
+                await asyncio.to_thread(validate_outbound_url, webhook_url)
+
             status, code, msg = await self._send_to_provider(
                 channel_type=ctype,
                 config=config,
